@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# OS files
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Cursor
+.cursor/mcp.json
+
+# Environment / secrets
+.env
+.env.*
+*.pem

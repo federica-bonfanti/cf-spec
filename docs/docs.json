@@ -1,0 +1,91 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "uSpec",
+  "description": "Generate design system documentation for your UI components — directly from Cursor to Figma. Create accessibility specs, color annotations, anatomy annotations, property exhibits, API docs, motion specs, and more.",
+  "colors": {
+    "primary": "#2428F7",
+    "light": "#b4c0fd",
+    "dark": "#3b0de1"
+  },
+  "appearance": {
+    "default": "light",
+    "strict": true
+  },
+  "background": {
+    "color": {
+      "light": "#fefcfa",
+      "dark": "#0F172A"
+    }
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Getting Started",
+        "icon": "rocket",
+        "pages": [
+          "index",
+          "getting-started",
+          "how-it-works"
+        ]
+      },
+      {
+        "group": "Spec Types",
+        "icon": "layer-group",
+        "pages": [
+          "specs/anatomy",
+          "specs/api",
+          "specs/property",
+          "specs/color",
+          "specs/structure",
+          "specs/screen-reader",
+          "specs/motion"
+        ]
+      },
+      {
+        "group": "Resources",
+        "icon": "circle-question",
+        "pages": [
+          "help/troubleshooting",
+          "help/contribute",
+          "help/changelog"
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "uSpec GitHub",
+          "href": "https://github.com/redongreen/uSpec",
+          "icon": "github"
+        },
+        {
+          "anchor": "Figma Console MCP",
+          "href": "https://github.com/southleft/figma-console-mcp",
+          "icon": "plug"
+        }
+      ]
+    }
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Ian Guisard @ Uber",
+        "href": "https://www.linkedin.com/in/iguisard/"
+      }
+    ]
+  },
+  "contextual": {
+    "options": []
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/redongreen/uSpec"
+    }
+  }
+}

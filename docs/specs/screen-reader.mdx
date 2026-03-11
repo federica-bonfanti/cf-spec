@@ -1,0 +1,110 @@
+---
+title: "Screen Reader"
+description: "Generate accessibility specifications for VoiceOver, TalkBack, and ARIA"
+---
+
+Screen reader specs document how assistive technologies should announce and interact with your component across iOS (VoiceOver), Android (TalkBack), and Web (ARIA).
+
+<Frame>
+  <video src="/images/specs/screen-reader-output.mp4" autoPlay muted loop playsInline alt="Example screen reader spec output in Figma" />
+</Frame>
+
+## What you need
+
+- A **Figma link** to the component
+- **Figma Console MCP** connected via the Desktop Bridge plugin
+- A description of states, behaviors, or interactive parts that aren't visible in the design
+
+<Tip>
+  Describe all interactive parts and how they relate. For example: "The label and hint merge into the input's announcement, but the trailing clear button is a separate focus stop." This helps the agent determine focus order accurately.
+</Tip>
+
+## When to use
+
+Create a screen reader spec when you need to document:
+
+- How a component should be announced by screen readers
+- Focus order for components with multiple interactive parts
+- Platform-specific accessibility properties
+- How announcements change across states (enabled, disabled, selected)
+
+## What the agent generates
+
+The agent analyzes your component's visual parts, determines which are independent focus stops vs. merged into another element's announcement, and renders per-platform documentation directly in your Figma file.
+
+### Simple vs. compound components
+
+<Tabs>
+  <Tab title="Simple (1 focus stop)">
+Components where all parts merge into a single focusable element.
+
+**Examples**: Button, Checkbox with label, Switch, Toggle
+
+The output documents one focus stop per state, with platform-specific properties for each.
+  </Tab>
+  <Tab title="Compound (2+ focus stops)">
+Components with multiple independently focusable elements.
+
+**Examples**: Text field with trailing clear button, Chip with dismiss action, Tab bar
+
+The output includes a **focus order** section showing the traversal sequence, plus per-state documentation for each stop.
+  </Tab>
+</Tabs>
+
+### Platform properties
+
+Each focus stop is documented with platform-specific properties:
+
+| Platform | Key properties |
+|----------|---------------|
+| **iOS (VoiceOver)** | `accessibilityLabel`, `accessibilityTraits`, `accessibilityHint`, `accessibilityValue` |
+| **Android (TalkBack)** | `contentDescription`, `role`, `stateDescription` |
+| **Web (ARIA)** | `role`, `aria-label`, `aria-describedby`, `aria-expanded` |
+
+### Merge analysis
+
+The agent determines how visual parts combine for accessibility:
+
+| Visual part | Typical behavior |
+|-------------|-----------------|
+| Label | Merges into the control's announcement |
+| Hint text | Becomes the accessibility hint or description |
+| Decorative icons | Hidden from screen readers |
+| Functional icons (e.g., clear button) | Separate focus stop |
+| Action buttons | Separate focus stop |
+
+## Example prompts
+
+<Tabs>
+  <Tab title="Simple button">
+```
+@create-voice https://www.figma.com/design/abc123/Components?node-id=100:200
+
+This is a primary action button with enabled, hover, pressed, and disabled states.
+```
+  </Tab>
+  <Tab title="Text field">
+```
+@create-voice https://www.figma.com/design/abc123/Components?node-id=200:300
+
+This is a search text field with a trailing clear button. The field has placeholder
+text "Search" and the clear button appears when text is entered.
+```
+  </Tab>
+  <Tab title="Tab bar">
+```
+@create-voice https://www.figma.com/design/abc123/Components?node-id=300:400
+
+This is a tab bar with 3 tabs: Home, Search, and Profile. Home is currently
+selected. Each tab has an icon and label.
+```
+  </Tab>
+</Tabs>
+
+## Tips for better output
+
+- **List all states**: enabled, disabled, selected, expanded, loading. The agent can't infer states it can't see in Figma
+- **Describe interactive parts and merge behavior**: explain which elements are tappable, which are decorative, and which should merge into another element's announcement. For example: *"The label and hint merge into the input's announcement, but the trailing clear button is a separate focus stop"*
+- **Mention reactive elements**: error messages, status updates, and toasts are announced as live regions, not focus stops. Call them out if they're part of your component
+- **Note focus order preferences**: if the traversal order matters (e.g., input before clear button), describe it
+- **Describe state-specific announcements**: if the announcement changes based on state (e.g., a switch announcing "on" vs "off"), mention it

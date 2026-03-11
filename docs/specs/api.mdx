@@ -1,0 +1,89 @@
+---
+title: "API"
+description: "Generate component property documentation with configuration examples"
+---
+
+API specs document all configurable properties for a component: values, defaults, required vs. optional, and usage examples. This gives engineers a clear reference for implementing the component.
+
+<Frame>
+  <video src="/images/specs/api-output.mp4" autoPlay muted loop playsInline alt="Example API spec output in Figma" />
+</Frame>
+
+## What you need
+
+- A **Figma link** to the component
+- **Figma Console MCP** connected via the Desktop Bridge plugin
+- Any additional context about properties, accepted values, or nested component configurations
+
+<Tip>
+  Mention which properties are required, what the defaults are, and any sub-components that have their own configuration (e.g., a trailing button inside a section heading).
+</Tip>
+
+## When to use
+
+Create an API spec when you need to document:
+
+- All configurable props and options for a component
+- Required vs. optional properties
+- Default values
+- Sub-component configurations (nested components with their own props)
+- Configuration examples for common use cases
+
+## What the agent generates
+
+The agent inspects your component's variant axes, boolean toggles, content slots, and variable modes, then renders a documentation frame in your Figma file:
+
+| Section | What it covers |
+|---------|---------------|
+| Main property table | All top-level properties with values, required status, defaults, and notes |
+| Sub-component tables | Separate tables for configurable nested elements (e.g., trailing content options) |
+| Configuration examples | 1–4 examples showing common setups |
+
+### How properties are identified
+
+The agent looks at three sources in Figma to find all configurable properties:
+
+- **Variant axes**: properties visible in variant names (size, type, state)
+- **Instance properties**: boolean toggles and content options only visible when inspecting a single instance
+- **Variable modes**: properties controlled at the container level (shape, density)
+
+<Note>
+  Transient interactive states like hover and pressed are not included as API properties. Those are handled at runtime by the platform. Only persistent states like disabled, selected, and loading appear as properties.
+</Note>
+
+## Example prompts
+
+<Tabs>
+  <Tab title="Simple component">
+```
+@create-api https://www.figma.com/design/abc123/Components?node-id=100:200
+
+This is a button with size, type, color, and label properties.
+```
+  </Tab>
+  <Tab title="Complex component">
+```
+@create-api https://www.figma.com/design/abc123/Components?node-id=200:300
+
+This is a section heading with leading content (primary/secondary labels),
+trailing content (text button, icon button, or none), and density options.
+```
+  </Tab>
+  <Tab title="Form control">
+```
+@create-api https://www.figma.com/design/abc123/Components?node-id=300:400
+
+This is a text field with label, placeholder, helper text, and error message.
+It supports leading and trailing icons, character count, and isDisabled state.
+The label is required, helper text is optional.
+```
+  </Tab>
+</Tabs>
+
+## Tips for better output
+
+- **Describe content slots with multiple options**: if a slot can contain different content types (icon, avatar, image, none), list them explicitly. For example: *"leading content can be an icon, avatar, or image"*
+- **Note required vs. optional**: mention which properties must always be set and which have defaults
+- **Mention sub-components**: if your component has configurable nested elements (e.g., a trailing button inside a section heading), describe their configuration options
+- **Specify defaults**: tell the agent which values are the default configuration
+- **Distinguish persistent from transient states**: mention states like `disabled`, `selected`, or `loading` that should become properties. Transient states like hover and pressed are handled at runtime and won't appear in the API

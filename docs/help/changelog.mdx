@@ -1,0 +1,27 @@
+---
+title: "Changelog"
+description: "Product updates and release history"
+---
+
+<Update label="V1 — March 2026" description="Initial open-source release">
+  ## uSpec V1
+
+  First public release of uSpec — an agentic system that generates design system documentation directly in Figma, powered by AI agent skills in Cursor.
+
+  ### Spec types
+
+  - **Anatomy**: numbered markers and attribute tables for component structure, with AI-driven element classification, per-child sections, and property-aware unhide
+  - **Properties**: variant axes, boolean toggles, variable mode exhibits, and child component chapters with live instance previews
+  - **API**: property tables with values, defaults, required status, sub-component tables, and configuration examples
+  - **Color Annotation**: design token mapping for fills, strokes, and shadows across states and variants, with automatic strategy selection
+  - **Structure**: dimensions, spacing, and padding across density, size, and shape variants with token references
+  - **Screen Reader**: VoiceOver (iOS), TalkBack (Android), and ARIA (Web) accessibility specs with focus order and merge analysis
+  - **Motion**: animation timeline bars and easing detail tables from After Effects keyframe data, with pre-computed segments and color-coded easing visualization
+
+  ### Infrastructure
+
+  - Agent skills architecture running in Cursor via `.cursor/skills/`
+  - Figma Console MCP integration for real-time component data extraction
+  - Template library system with one-time `@setup-library` configuration
+  - Documentation site at [docs.uspec.design](https://docs.uspec.design)
+</Update>

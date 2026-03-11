@@ -1,0 +1,286 @@
+---
+title: "How It Works"
+description: "Understand the pipeline that turns a Figma link into structured documentation"
+---
+
+uSpec connects Cursor and Figma into a single pipeline. You provide a component link and context, and the system produces formatted documentation directly in your Figma file.
+
+## The pipeline at a glance
+
+```mermaid
+flowchart LR
+    A[You] -->|Figma link| B[Agent Skill]
+    B -->|Extract + Render| C[Console MCP]
+    C -->|Documentation frame| D[Figma Output]
+```
+
+Every skill extracts component data and renders documentation directly in Figma via the Console MCP. The internal steps differ depending on what each skill needs to analyze. The diagrams below show what happens inside each skill.
+
+---
+
+## Triggering a skill
+
+Skills are triggered by typing `@` followed by the skill name in Cursor's chat.
+
+<Steps>
+  <Step title="Type @">
+    In Cursor's chat, type `@`. Cursor shows an autocomplete menu of available skills.
+  </Step>
+  <Step title="Select a skill">
+    Continue typing to filter (e.g., `@create-v`) or use arrow keys to select. The skill name must match exactly: `@create-voice`, not `create voice` or `voice spec`.
+  </Step>
+  <Step title="Add your prompt">
+    After the skill name, paste a Figma link and add any context about states, variants, or behaviors.
+  </Step>
+</Steps>
+
+<Tip>
+  If autocomplete doesn't show the skill, verify the uSpec project is open in Cursor. Skills load from the `.cursor/skills/` folder.
+</Tip>
+
+---
+
+## Inside each skill
+
+Every skill loads an instruction file, reads platform-specific or domain-specific reference files, extracts data from Figma via MCP, runs through a checklist, and renders the output. The reference files determine what the agent knows about each domain.
+
+<Tabs>
+  <Tab title="Anatomy">
+    The anatomy skill extracts child layers, element types, and property definitions, then classifies each element's role before rendering numbered markers with an attribute table directly in Figma.
+
+```mermaid
+flowchart TB
+    Skill[SKILL.md] --> Instruction[agent-anatomy-instruction.md]
+    Skill --> MCP[Figma Console MCP]
+
+    MCP --> Extract[Extract children, layers, and properties]
+    Instruction --> Classify[Classify elements and enrich notes]
+    Extract --> Classify
+    Classify --> Import[Import and detach template]
+    Import --> Composition[Render composition markers and table]
+    Composition --> Children[Per-child sections for eligible instances]
+    Children --> Validate[Screenshot validation]
+```
+
+  The skill reads child layers, element types, visibility, and property definitions (booleans, variant axes, instance swaps) from the component. An AI classification step then determines each element's role (optional slot, fixed sub-component, content element, structural/decorative) and writes semantic notes. Utility sub-components like Spacer and Divider are automatically skipped. Eligible nested instances get their own per-child sections with separate markers and tables, and cross-references link back from the composition table.
+  </Tab>
+
+  <Tab title="Properties">
+    The property skill extracts variant axes, boolean toggles, variable modes, and child component properties, then renders visual exhibits with live instance previews directly in Figma.
+
+```mermaid
+flowchart TB
+    Skill[SKILL.md] --> MCP[Figma Console MCP]
+
+    MCP --> Extract[Extract properties and variant axes]
+    MCP --> Modes[Detect variable mode properties]
+    MCP --> Children[Discover child component properties]
+
+    Extract --> Normalize[Normalize coupled axes and booleans]
+    Modes --> Normalize
+    Children --> Normalize
+
+    Normalize --> Import[Import and detach template]
+    Import --> Render[Render exhibits with instance previews]
+    Render --> Validate[Screenshot validation]
+```
+
+  The skill reads `componentPropertyDefinitions` to discover all variant axes, boolean toggles, and instance swap properties. Variable mode collections (shape, density) are detected automatically. Child component properties are rendered in-context on parent instances.
+  </Tab>
+
+  <Tab title="API">
+    The API skill loads its instruction file, identifies all configurable properties (including sub-component slots), and renders property tables with configuration examples directly in Figma.
+
+```mermaid
+flowchart TB
+    Skill[SKILL.md] --> Instruction[agent-api-instruction.md]
+    Skill --> MCP[Figma Console MCP]
+
+    Instruction --> Analyze[Analyze properties]
+    MCP --> Props[Extract variant properties]
+    MCP --> Booleans[Extract boolean properties]
+    MCP --> Slots[Extract sub-component slots]
+
+    Props --> Analyze
+    Booleans --> Analyze
+    Slots --> Analyze
+
+    Analyze --> Classify[Classify transient vs persistent]
+    Classify --> MainTable[Generate main property table]
+    Analyze --> SubTables[Generate sub-component tables]
+
+    MainTable --> Examples[Generate configuration examples]
+    SubTables --> Examples
+    Examples --> Checklist[Audit against checklist]
+    Checklist --> Render[Render in Figma via figma_execute]
+    Render --> Validate[Screenshot validation]
+```
+
+  Transient states like hover and pressed are excluded from the API. They are handled at runtime. Only persistent, configurable properties like `isDisabled` or `isSelected` become API entries.
+  </Tab>
+
+  <Tab title="Structure">
+    The structure skill loads its instruction file, measures all dimensional properties, and renders them into tables by variant axis (size, density, or shape) directly in Figma.
+
+```mermaid
+flowchart TB
+    Skill[SKILL.md] --> Instruction[agent-structure-instruction.md]
+    Skill --> MCP[Figma Console MCP]
+
+    Instruction --> Analyze[Analyze structure]
+    MCP --> Measure[Measure dimensions and spacing]
+    MCP --> VarAxes[Identify variant axes]
+    MCP --> TokenVals[Extract token-bound values]
+
+    Measure --> DeepExplore[Deep exploration: walk sub-components]
+    VarAxes --> DeepExplore
+    DeepExplore --> Organize[Organize by section]
+    TokenVals --> Organize
+
+    Analyze --> Columns[Determine column pattern]
+    Columns --> Organize
+    Organize --> Hierarchy[Apply property hierarchy]
+    Hierarchy --> Checklist[Audit against checklist]
+    Checklist --> Render[Render in Figma via figma_execute]
+    Render --> Validate[Screenshot validation]
+```
+
+  After measuring the top-level component, the skill runs a deep exploration step: it walks sub-components, enables all boolean toggles, and inspects internal child trees across sizes and states. Values are reported as token references when bound to a variable (e.g., `sizing-button-lg (56)`) or as plain numbers when hardcoded. The column pattern depends on the component: sizes get columns like Large, Medium, Small; density gets Compact, Default, Spacious.
+  </Tab>
+
+  <Tab title="Color Annotation">
+    The color skill loads a single instruction file, then extracts design tokens and variable values from Figma, classifies which axes and modes affect color, chooses a rendering strategy, and renders the annotation directly in Figma.
+
+```mermaid
+flowchart TB
+    Skill[SKILL.md] --> Instruction[agent-color-instruction.md]
+    Skill --> MCP[Figma Console MCP]
+
+    Instruction --> Analyze[Analyze color usage]
+    MCP --> Tokens[Extract design tokens]
+    MCP --> Variables[Extract variable values]
+    MCP --> Styles[Extract styles]
+
+    Tokens --> Enrich[Boolean enrichment: enable hidden toggles]
+    Variables --> Enrich
+    Styles --> Enrich
+
+    Enrich --> ClassifyAxes[Classify color-relevant axes]
+    ClassifyAxes --> DetectModes[Detect variable mode collections]
+    DetectModes --> Strategy{Strategy A or B?}
+
+    Strategy -->|"6 or fewer sections"| StratA[Strategy A: one section per variant]
+    Strategy -->|"More than 6 sections"| StratB[Strategy B: states as columns]
+
+    Analyze --> Strategy
+    StratA --> Checklist[Audit against checklist]
+    StratB --> Checklist
+    Checklist --> Render[Render in Figma via figma_execute]
+    Render --> Validate[Screenshot validation]
+```
+
+  The agent reads token names directly from Figma variables, so the output uses your actual token naming conventions rather than generic names. Hidden boolean toggles are enabled during extraction to capture color bindings that only appear when optional elements are visible. The strategy decision determines the output layout: Strategy A renders one section per variant for simpler components, while Strategy B uses states as table columns for components with many variant combinations.
+  </Tab>
+
+  <Tab title="Screen Reader">
+    The screen reader skill loads four reference files, one for general instructions and one per platform, then runs a merge analysis to determine focus stops before rendering per-platform tables directly in Figma.
+
+```mermaid
+flowchart TB
+    Skill[SKILL.md] --> Instruction[agent-screenreader-instruction.md]
+    Skill --> VO[voiceover.md]
+    Skill --> TB[talkback.md]
+    Skill --> AR[aria.md]
+
+    Instruction --> MCP[Figma Console MCP]
+    MCP --> Extract[Extract component structure]
+
+    Extract --> Merge[Merge analysis]
+    Merge --> Focus[Identify focus stops]
+
+    VO --> Gen[Generate platform tables]
+    TB --> Gen
+    AR --> Gen
+    Focus --> Gen
+
+    Gen --> Checklist[Audit against checklist]
+    Checklist --> Render[Render in Figma via figma_execute]
+    Render --> Validate[Screenshot validation]
+```
+
+  The merge analysis is the critical step. It determines which visual parts become independent focus stops and which get merged into a parent announcement. The three platform files provide the exact property names and announcement patterns for iOS, Android, and Web.
+  </Tab>
+
+  <Tab title="Motion">
+    The motion skill is unique: instead of extracting data from Figma, it reads pre-computed animation data exported from After Effects. The `export-timeline.jsx` script does the heavy lifting — pairing keyframes into segments, computing cubic-bezier easing curves, and filtering out static segments. The agent reads the segments directly and renders them as a timeline visualization in Figma.
+
+```mermaid
+flowchart TB
+    AE[After Effects] -->|"Run export-timeline.jsx"| JSON[JSON on clipboard]
+    JSON -->|Paste or file ref| Skill[SKILL.md]
+    Skill --> Instruction[agent-motion-instruction.md]
+    Skill --> MCP[Figma Console MCP]
+
+    Instruction --> Parse[Parse and validate JSON]
+    JSON --> Parse
+    Parse --> Layout[Compute track width and tick spacing]
+    Layout --> Import[Import and detach template]
+    Import --> Ruler[Render time ruler]
+    Ruler --> Timeline[Render timeline layers and bars]
+    Timeline --> Table[Render detail table rows]
+    Table --> Validate[Screenshot validation]
+```
+
+  This is a two-step process: first run the export script in After Effects to get the JSON, then run `@create-motion` with that output. The JSON contains composition metadata (name, duration, fps, dimensions) and a flat array of layers, each with pre-computed segments containing timing, values, bar labels, and easing data. The agent computes only layout values (track width, pixels per millisecond) and passes everything else through to Figma.
+  </Tab>
+</Tabs>
+
+---
+
+## What the agent sees vs. what you provide
+
+The agent can extract structure, tokens, and styles from Figma automatically. But some information only exists in your head:
+
+| The agent can extract | You need to describe |
+|----------------------|---------------------|
+| Component layers and hierarchy | States not visible in the current frame |
+| Design token names and values | Behavioral modes (fill vs. hug, truncation) |
+| Variant axes and properties | Focus order preferences |
+| Visual dimensions and spacing | Platform-specific interaction details |
+| Styles and color values | Business logic or conditional rules |
+
+<Tip>
+  The more context you provide in your prompt, the more accurate the output. A one-line prompt works, but adding states, behaviors, and edge cases produces significantly better specs.
+</Tip>
+
+---
+
+## Architecture overview
+
+```mermaid
+flowchart TB
+    subgraph Cursor["Cursor IDE"]
+        direction TB
+        Prompt[Your prompt]
+        Skill[Agent skill + reference files]
+        Agent[AI agent]
+        Prompt --> Skill --> Agent
+    end
+
+    subgraph Figma["Figma Desktop"]
+        direction TB
+        File[Figma file]
+        Output[Documentation frames]
+    end
+
+    subgraph MCP["Figma Console MCP"]
+        Bridge[Desktop Bridge]
+    end
+
+    Agent <-->|Component data, tokens, styles| Bridge
+    Agent -->|Render documentation| Bridge
+    Bridge <-->|WebSocket| File
+    File --> Output
+```
+
+The Figma Console MCP acts as the bridge between Cursor and Figma Desktop. It connects via WebSocket through the Desktop Bridge plugin, giving the agent real-time access to your file data without requiring manual export. Every skill renders through the MCP bridge.

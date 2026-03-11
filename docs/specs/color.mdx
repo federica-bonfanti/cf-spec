@@ -1,0 +1,91 @@
+---
+title: "Color Annotation"
+description: "Generate design token specifications mapping UI elements to color tokens"
+---
+
+Color annotation specs document which design tokens are used for backgrounds, text, icons, and state layers across different component states and variants.
+
+<Frame>
+  <video src="/images/specs/color-output.mp4" autoPlay muted loop playsInline alt="Example color annotation output in Figma" />
+</Frame>
+
+## What you need
+
+- A **Figma link** to the component
+- **Figma Console MCP** connected via the Desktop Bridge plugin
+- Any additional context about variants, states, or which color modes to include
+
+<Tip>
+  If your component uses Figma variable modes for color variants (e.g., a "Tag color" collection with Default, Success, Warning modes), mention it in your prompt. The agent checks for these automatically, but calling them out helps.
+</Tip>
+
+## When to use
+
+Create a color annotation when you need to document:
+
+- Which color tokens each UI element uses
+- How colors change across states (enabled, hover, pressed, disabled)
+- Token usage for different variants (default, danger, etc.)
+- Color tokens for variable-mode-controlled variants (like tag colors or badge styles)
+
+## What the agent generates
+
+The agent inspects your component's fills, strokes, and variables, then maps every color-bearing element to its design token and renders the documentation directly in your Figma file.
+
+### How the output is organized
+
+The structure depends on your component type:
+
+<Tabs>
+  <Tab title="Static content">
+Components without interactive states (headers, cards, labels) get a single table mapping each element to its token.
+  </Tab>
+  <Tab title="Interactive">
+Components with states (buttons, checkboxes, inputs) get a separate table per state showing how tokens change across enabled, hover, pressed, and disabled.
+  </Tab>
+  <Tab title="Multi-variant">
+Components with style or color variants (default + danger, primary + secondary) get separate variant sections, each with their own state tables.
+  </Tab>
+  <Tab title="Variable mode">
+Components where color is controlled by a Figma variable collection (tag colors, badge styles, emphasis levels) get one section per mode value.
+  </Tab>
+</Tabs>
+
+<Note>
+  Light and dark themes don't need separate documentation. Semantic tokens handle theme switching automatically.
+</Note>
+
+## Example prompts
+
+<Tabs>
+  <Tab title="Static component">
+```
+@create-color https://www.figma.com/design/abc123/Components?node-id=100:200
+
+This is a section heading with a title, subtitle, and optional trailing action.
+```
+  </Tab>
+  <Tab title="Interactive component">
+```
+@create-color https://www.figma.com/design/abc123/Components?node-id=200:300
+
+This is a button with enabled, hover, pressed, and disabled states.
+Include both Default and Danger variants.
+```
+  </Tab>
+  <Tab title="Variable mode component">
+```
+@create-color https://www.figma.com/design/abc123/Components?node-id=300:400
+
+This is a tag component. Color is controlled by a "Tag color" variable
+collection with modes: Default, Success, Warning, and Error.
+```
+  </Tab>
+</Tabs>
+
+## Tips for better output
+
+- **List all states**: enabled, hover, pressed, disabled. The agent maps tokens per state
+- **Mention color variants**: if your component has Default and Danger (or similar), describe both
+- **Call out variable mode collections**: if color is controlled by a Figma variable collection (e.g., *"Tag color"* with Default, Success, Warning, Error modes), name the collection and its modes in your prompt. The agent checks for these automatically, but explicit mention ensures nothing is missed
+- **Note sub-components**: if your component contains another component (e.g., a Button inside a Section heading), the agent references it instead of duplicating its tokens

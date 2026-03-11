@@ -1,0 +1,286 @@
+---
+title: "Getting Started"
+description: "Set up Cursor, Figma Console MCP, and your template library, then create your first spec"
+---
+
+This page covers everything you need to go from zero to your first generated spec.
+
+<CardGroup cols={2}>
+  <Card title="Setup instructions" icon="download" href="#setup-instructions">
+    Install Cursor, connect Figma, and configure your template library.
+  </Card>
+  <Card title="Create your first spec" icon="rocket" href="#create-your-first-spec">
+    Prompt format, available skills, and tips for better output.
+  </Card>
+</CardGroup>
+
+---
+
+## Setup instructions
+
+uSpec runs entirely in Cursor and connects to Figma through the Figma Console MCP. You need three things:
+
+1. **Cursor**: the AI code editor that runs uSpec agent skills
+2. **Figma Console MCP**: the bridge that connects Cursor to your Figma files
+3. **Template library**: the Figma file containing documentation templates
+
+<Note>
+  You only need to complete this setup once. After that, you can generate specs anytime by opening the project in Cursor.
+</Note>
+
+### 1. Install Cursor
+
+Cursor is the AI code editor that powers uSpec. All agent skills run inside Cursor's chat.
+
+<Steps>
+  <Step title="Download Cursor">
+    Go to [cursor.com](https://cursor.com) and download the app for your platform.
+  </Step>
+  <Step title="Clone the uSpec repository">
+    Clone the repository to your local machine.
+
+    ```bash
+    git clone https://github.com/redongreen/uSpec.git
+    ```
+  </Step>
+  <Step title="Open the project in Cursor">
+    Open the `uSpec` folder in Cursor. The agent skills in `.cursor/skills/` load automatically. No extra configuration needed.
+  </Step>
+  <Step title="Select the right model">
+    uSpec skills are token-intensive and require a model with high context capacity. In Cursor's chat, select **Claude 4.6 Opus (Thinking)** or higher as your model.
+
+    <Warning>
+      Lower-capacity models may truncate instructions mid-skill, producing incomplete or broken specs. Claude 4.6 Opus (Thinking) is the minimum recommended model.
+    </Warning>
+  </Step>
+</Steps>
+
+<Check>
+  You can verify skills are available by typing `@create-voice` in Cursor's chat. It should autocomplete to the skill file.
+</Check>
+
+---
+
+### 2. Set up Figma Console MCP
+
+The [Figma Console MCP](https://github.com/southleft/figma-console-mcp) connects Cursor to Figma Desktop, giving the agent access to your component data, variables, styles, and screenshots.
+
+#### Get a Figma personal access token
+
+<Steps>
+  <Step title="Go to the Figma API settings">
+    Open [figma.com/developers/api#access-tokens](https://www.figma.com/developers/api#access-tokens)
+  </Step>
+  <Step title="Create a token">
+    Click **"Get personal access token"**, enter a description like `Figma Console MCP`, and copy the token. It starts with `figd_`.
+  </Step>
+</Steps>
+
+<Warning>
+  Copy the token immediately. You won't be able to see it again after closing the dialog.
+</Warning>
+
+#### Configure the MCP in Cursor
+
+Add the Figma Console MCP to your Cursor MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "figma-console": {
+      "command": "npx",
+      "args": ["-y", "figma-console-mcp@latest"],
+      "env": {
+        "FIGMA_ACCESS_TOKEN": "figd_YOUR_TOKEN_HERE"
+      }
+    }
+  }
+}
+```
+
+<Tip>
+  This uses the NPX setup, which gives you all 56+ tools including design creation and variable management. For alternative installation methods, troubleshooting, and the latest configuration options, see the [Figma Console MCP documentation](https://docs.figma-console-mcp.southleft.com/).
+</Tip>
+
+#### Connect to Figma Desktop
+
+The **Desktop Bridge plugin** provides real-time access to your Figma file data. It comes bundled with the Figma Console MCP.
+
+<Steps>
+  <Step title="Install the Desktop Bridge plugin">
+    The Desktop Bridge plugin is included in the `figma-console-mcp` npm package. After running `npx figma-console-mcp@latest`, find the plugin at `node_modules/figma-console-mcp/figma-desktop-bridge/manifest.json`. In Figma Desktop, go to **Plugins → Development → Import plugin from manifest...** and select this file.
+  </Step>
+  <Step title="Run the plugin">
+    Open the Desktop Bridge plugin in your Figma file. It auto-connects via WebSocket. No special launch flags needed.
+  </Step>
+  <Step title="Verify the connection">
+    In Cursor's chat, type: *"Check Figma status"*
+
+    The agent should confirm an active connection.
+  </Step>
+</Steps>
+
+<Check>
+  When the connection is active, Cursor can read your Figma file data, take screenshots, and access variables and styles.
+</Check>
+
+---
+
+### 3. Set up the template library
+
+uSpec renders documentation using Figma component templates. Every skill depends on these templates — without them, specs cannot be generated. You need to add the templates to your Figma organization and run a one-time configuration step.
+
+<Note>
+  Uber designers can skip this step. The internal template library is already configured.
+</Note>
+
+#### Get the template file
+
+<Steps>
+  <Step title="Open the Community file">
+    Go to the [uSpec Template](https://www.figma.com/community/file/1603925462078533207/uspec-template) on Figma Community.
+  </Step>
+  <Step title="Duplicate to your drafts">
+    Click **Open in Figma** to add a copy to your drafts.
+  </Step>
+  <Step title="Publish as a library">
+    Move the file to your team or organization project, then publish it as a library:
+    1. Open the file in Figma
+    2. Go to the **Assets** panel
+    3. Click the book icon and select **Publish library**
+    4. Confirm the publish
+
+    This makes the templates available for uSpec to import.
+  </Step>
+</Steps>
+
+<Tip>
+  If you're working solo or testing, you can skip publishing and use the file directly. The setup skill will still work as long as you have the file open.
+</Tip>
+
+#### Configure the templates
+
+Run the setup skill in Cursor to connect uSpec to your template library:
+
+<Steps>
+  <Step title="Open the Desktop Bridge plugin">
+    In Figma Desktop, open the **Desktop Bridge** plugin in your template library file.
+  </Step>
+  <Step title="Run the setup skill">
+    In Cursor's chat, type:
+
+    ```
+    @setup-library (link to your template library)
+    ```
+  </Step>
+  <Step title="Wait for confirmation">
+    The agent extracts component keys from your templates and updates the configuration automatically.
+  </Step>
+</Steps>
+
+<Check>
+  When you see "Setup complete! You are now ready to use uSpec", your template library is configured.
+</Check>
+
+---
+
+## Create your first spec
+
+Before running a skill, confirm all three setup steps are complete:
+
+1. Cursor is open with the uSpec project and skills are autocompleting
+2. The Desktop Bridge plugin is running in Figma and the connection is active
+3. The template library is configured (`uspecs.config.json` has your template keys)
+
+Every prompt follows the same format:
+
+<Frame>
+  <img src="/images/example-skill.png" alt="Prompt format showing skill name, Figma component link, and additional context" />
+</Frame>
+
+Reference a skill, paste a Figma link, and describe anything the agent can't infer from the design: states, variants, behavior, or interaction details.
+
+### Example prompt
+
+```
+@create-voice https://www.figma.com/design/abc123/Components?node-id=100:200
+
+This is a primary action button with enabled, hover, pressed, and disabled states.
+The button has a text label and an optional leading icon.
+```
+
+### Available skills
+
+| Skill | What it generates |
+|-------|-------------------|
+| `@create-anatomy` | Numbered markers on a component with an attribute table |
+| `@create-property` | Variant axis and boolean toggle exhibits with instance previews |
+| `@create-voice` | Screen reader specs for VoiceOver, TalkBack, and ARIA |
+| `@create-color` | Color token annotations for all elements and states |
+| `@create-api` | Property tables with values, defaults, and examples |
+| `@create-structure` | Dimensional specs for spacing, padding, and sizing |
+| `@create-motion` | Animation timeline and easing spec from After Effects data |
+
+### What happens when you run a skill
+
+<Steps>
+  <Step title="Template import">
+    The agent imports the documentation template into your current Figma page.
+  </Step>
+  <Step title="Content population">
+    Component name, guidelines, properties, and tables are filled in automatically.
+  </Step>
+  <Step title="Section cloning">
+    Sections are cloned for each variant, state, or property in your component.
+  </Step>
+  <Step title="Validation">
+    A screenshot is captured and verified. Issues are fixed automatically.
+  </Step>
+</Steps>
+
+<Check>
+  If a documentation frame appears in your Figma file, your setup is working correctly.
+</Check>
+
+### Tips for better output
+
+- **Be specific about states**: Mention all states (selected, disabled, expanded) in your prompt. The agent cannot infer states that aren't visible in the current Figma frame.
+- **Describe the parts**: For complex components, describe the interactive elements (e.g., *"This is a tooltip. The bell icon triggers it, and the bubble appears on hover and focus."*)
+
+---
+
+## Best practices
+
+### Do
+
+- **Start a new agent session for every prompt.** Each skill consumes significant context. A fresh session ensures the model has full capacity and avoids degraded output.
+- **Confirm the MCP connection before running a skill.** Run the Desktop Bridge plugin in Figma and verify the connection in Cursor. If the agent can't reach Figma, the skill will fail.
+- **Run one agent per Figma file at a time.** The MCP supports multiple connections, but all agents share one active page and file context. Finish one skill before starting the next.
+
+### Don't
+
+- **Interact with the Figma frame while a skill is running.** The agent writes to the frame in multiple steps. Clicking, selecting, or editing mid-generation can break node references and corrupt the output.
+- **Run multiple agents on the same file simultaneously.** They override each other's page navigation and produce corrupted specs. If you need parallel generation, use separate Figma files.
+- **Reuse a long chat session for multiple skills.** Accumulated history reduces available context and degrades output quality. Start fresh each time.
+
+---
+
+## Setup issues
+
+<AccordionGroup>
+  <Accordion title="Skills don't autocomplete in Cursor">
+    - Confirm the uSpec project folder is open in Cursor (not a parent directory)
+    - Check that `.cursor/skills/` contains the skill folders
+    - Restart Cursor after cloning the repository
+  </Accordion>
+  <Accordion title="Desktop Bridge not connecting">
+    - Confirm Figma Desktop is running (not the web version)
+    - Close and reopen the Desktop Bridge plugin in Figma
+    - Make sure only one instance of Figma Desktop is running
+    - Check that your Figma access token is configured correctly in Cursor's MCP settings
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  For issues with skills or Figma connection, see the [Troubleshooting guide](/help/troubleshooting).
+</Note>

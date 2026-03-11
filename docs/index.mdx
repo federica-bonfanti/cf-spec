@@ -1,0 +1,58 @@
+---
+title: "Introduction"
+description: "Generate design system documentation for your UI components, directly from Cursor to Figma"
+---
+
+<Frame>
+  <img src="/images/cover.png" alt="uSpec — generate design system documentation from Cursor to Figma" />
+</Frame>
+
+uSpec helps you generate structured documentation for your UI components, directly from Cursor to Figma. You describe a component, an AI agent skill analyzes it using your Figma file as context, and renders the spec directly in your Figma file.
+
+## What you can create
+
+<CardGroup cols={3}>
+  <Card title="Component Anatomy" icon="crosshairs" href="/specs/anatomy">
+    Numbered markers and attribute tables for every element
+  </Card>
+  <Card title="Component API" icon="code" href="/specs/api">
+    Properties, values, defaults, and configuration examples
+  </Card>
+  <Card title="Component Properties" icon="sliders" href="/specs/property">
+    Variant axes, boolean toggles, and variable mode exhibits
+  </Card>
+  <Card title="Component Color" icon="palette" href="/specs/color">
+    Design token mapping for every element and state
+  </Card>
+  <Card title="Component Structure" icon="ruler" href="/specs/structure">
+    Dimensions, spacing, and padding across density and size variants
+  </Card>
+  <Card title="Screen Reader" icon="universal-access" href="/specs/screen-reader">
+    VoiceOver, TalkBack, and ARIA accessibility specs
+  </Card>
+  <Card title="Motion" icon="film" href="/specs/motion">
+    Animation timeline bars and easing details from After Effects
+  </Card>
+</CardGroup>
+
+## How it works
+
+<Steps>
+  <Step title="Provide a Figma link and context">
+    Share a link to the component in Figma. This is the primary input. You can also add a description of states, variants, or behavior to guide the agent. The Figma Console MCP pulls structure, variables, and styles directly from your file.
+  </Step>
+  <Step title="Trigger an agent skill">
+    In Cursor's chat, reference the skill you need, like `@create-voice` for screen reader specs or `@create-color` for color annotations. The agent analyzes your component and renders documentation directly in your Figma file.
+  </Step>
+</Steps>
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card title="Setup" icon="download" href="/getting-started">
+    Set up Cursor, Figma Console MCP, and your template library.
+  </Card>
+  <Card title="Create your first spec" icon="rocket" href="/getting-started#create-your-first-spec">
+    Prompt format, available skills, and tips for better output.
+  </Card>
+</CardGroup>

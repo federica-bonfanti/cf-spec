@@ -1,0 +1,87 @@
+---
+title: "Structure"
+description: "Generate dimensional properties documentation for spacing, padding, and density variants"
+---
+
+Structure specs document component measurements such as heights, widths, padding, and gaps, and how those values change across variants like density, size, and shape.
+
+<Frame>
+  <video src="/images/specs/structure-output.mp4" autoPlay muted loop playsInline alt="Example structure spec output in Figma" />
+</Frame>
+
+## What you need
+
+- A **Figma link** to the component
+- **Figma Console MCP** connected via the Desktop Bridge plugin
+- Any additional context about density modes, size variants, or specific sub-components to include
+
+<Tip>
+  Tell the agent which variant axes affect dimensions. A button might vary by size, while a list item varies by density. The agent checks both explicit variants and variable mode collections.
+</Tip>
+
+## When to use
+
+Create a structure spec when you need to document:
+
+- Component dimensions (height, width, min/max values)
+- Spacing and padding values
+- How values change across density modes (compact, default, spacious)
+- How values change across sizes (small, medium, large)
+- Gap and alignment specifications
+
+## What the agent generates
+
+The agent measures your component and renders a documentation frame directly in your Figma file with tables showing how values change across variants.
+
+| Aspect | What it covers |
+|--------|---------------|
+| Container dimensions | Heights, widths, min/max constraints |
+| Padding and spacing | Horizontal and vertical padding, gaps between elements |
+| Sub-component dimensions | Sizes for icons, avatars, and other nested elements |
+| Token references | Links values to design tokens when they exist |
+| Composition mapping | How parent sizes map to sub-component sizes |
+
+### How tables are organized
+
+Each section covers a part of the component (container, leading content, labels, trailing content). Columns represent variants, either sizes or density modes, so you can see how values change across configurations.
+
+<Note>
+  Some dimensional properties are controlled via Figma variable modes (like density) rather than explicit variant axes. The agent checks for both automatically.
+</Note>
+
+## Example prompts
+
+<Tabs>
+  <Tab title="Size-based">
+```
+@create-structure https://www.figma.com/design/abc123/Components?node-id=100:200
+
+This is a button with four sizes: Large (56px), Medium (48px), Small (40px),
+XSmall (32px). Include padding and icon sizes.
+```
+  </Tab>
+  <Tab title="Density-based">
+```
+@create-structure https://www.figma.com/design/abc123/Components?node-id=200:300
+
+This is a list item with Compact, Default, and Spacious densities. Include
+container, leading slot, label, and trailing slot dimensions.
+```
+  </Tab>
+  <Tab title="Single spec">
+```
+@create-structure https://www.figma.com/design/abc123/Components?node-id=300:400
+
+This is a tooltip with a single size. Document the container padding,
+max width, arrow dimensions, and offset from the trigger element.
+```
+  </Tab>
+</Tabs>
+
+## Tips for better output
+
+- **Specify which parts to include**: container, leading content, labels, trailing content, dividers
+- **Mention density or size variants**: the agent organizes columns based on these. If density is controlled via variable modes (Compact, Default, Spacious), mention the mode names
+- **Describe composition relationships**: if your component is composed of multiple sub-components (e.g., Text Field = Label + Input + Hint Text), describe how parent sizes map to child sizes
+- **Call out sub-components**: if a sub-component has its own spec (e.g., Avatar inside a List item), the agent cross-references it
+- **Note any state-specific dimensions**: some states introduce additional properties (e.g., a focused input gaining an inner border that doesn't exist in the default state)

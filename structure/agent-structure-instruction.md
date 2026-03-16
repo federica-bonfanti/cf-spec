@@ -35,7 +35,7 @@ User-provided: component name, specific dimensional properties to document, sub-
 
 ## Figma Inspection Reference
 
-This section is a reference for what to inspect and how. The SKILL.md workflow (Steps 4a-4d) tells you *when* to use these tools; this section tells you *what to look for*.
+This section is a reference for what the extraction scripts inspect and how. The SKILL.md workflow (Steps 4a-4d) tells you *when* to run these tools; this section explains *what properties* the extraction accesses so you can interpret its output correctly.
 
 ### MCP Tools
 
@@ -46,23 +46,26 @@ This section is a reference for what to inspect and how. The SKILL.md workflow (
 | `figma_get_file_data` | Get component set structure, variant axes, property definitions | Component set node ID |
 | `figma_get_component` | Get detailed data for a specific variant instance | Instance node ID |
 | `figma_get_component_for_development` | Get component data with visual reference for dev handoff | Component node ID |
-| `figma_execute` | Run extraction script or free-form queries to measure dimensions, padding, spacing, tokens | `code`: JS using Plugin API |
+| `figma_execute` | Run the extraction (Step 4b) and cross-variant (Step 4d) scripts, and render sections (Steps 9-11) | `code`: JS using Plugin API |
 | `figma_get_variables` | Discover variable collections and modes (Density, Shape, Theme) | `fileUrl`, `format: "filtered"`, `namePattern` |
 
-### What to Query with `figma_execute`
+**Important:** Do NOT write ad-hoc `figma_execute` queries to gather dimensional data. The extraction (Step 4b) and cross-variant (Step 4d) scripts collect all measurements deterministically. Use `figma_execute` only for the pre-written scripts in Steps 4b, 4d, 9, 10, 11b, and 11c.
 
-| Data Needed | Node Properties to Access |
+### Figma Properties Reference
+
+The extraction scripts access these properties internally. This reference helps you interpret the extraction output — you do not need to query these properties yourself.
+
+| Data Category | Properties Accessed by Extraction |
 |-------------|---------------------------|
 | Variant axes | `node.variantGroupProperties` (on COMPONENT_SET) |
 | Dimensions | `node.width`, `node.height`, `node.minWidth`, `node.maxWidth`, `node.minHeight`, `node.maxHeight` |
-| Overflow | `node.clipsContent` — whether the frame clips children that exceed its bounds |
-| Padding | `node.paddingTop`, `node.paddingBottom`, `node.paddingLeft`, `node.paddingRight` |
+| Overflow | `node.clipsContent` |
+| Padding | `node.paddingTop`, `node.paddingBottom`, `node.paddingLeft`, `node.paddingRight` → collapsed to logical `start`/`end` |
 | Spacing | `node.itemSpacing`, `node.counterAxisSpacing` |
-| Corner radius | `node.cornerRadius` |
-| Variable bindings | `node.boundVariables` → use `figma.variables.getVariableById(binding.id)` to get token name |
-| Typography style | `textNode.textStyleId` → use `figma.getStyleByIdAsync(id)` to get style name |
-| Custom typography | `textNode.fontSize`, `textNode.fontName`, `textNode.lineHeight`, `textNode.letterSpacing` |
-| All variants | `componentSet.children.map(v => ({ name: v.name, ...props }))` |
+| Corner radius | `node.cornerRadius` (or per-corner when mixed) → collapsed to `topStart`/`topEnd`/`bottomStart`/`bottomEnd` |
+| Variable bindings | `node.boundVariables` → resolved to token names with `display` strings |
+| Typography | `textNode.textStyleId` → `typography.styleName`, or inline props → `typography.{ fontSize, fontWeight, ... }` |
+| Sub-components | `instance.getMainComponentAsync()` → `subCompSetId`, `subCompVariantAxes`, `booleanOverrides` |
 
 ### Identifying Variant Axes and Variable Modes
 
@@ -108,32 +111,61 @@ Look for `valuesByMode` in the response. If it has multiple mode values, those b
 
 ### Extracting Measurements
 
-For each property across variants:
-1. Get the actual numeric values from Figma
-2. Check if the value is bound to a variable (semantic token)
-3. If token-bound: format as `"token-name (resolved-value)"`
-4. If hardcoded: format as plain number without units
+The enhanced extraction script (Step 4b) provides pre-formatted `display` strings on every dimensional property. Use `display` directly as table cell values:
+- Token-bound: `display` = `"token-name (resolved-value)"` (e.g., `"spacing-md (16)"`)
+- Hardcoded: `display` = `"value"` (e.g., `"16"`)
+
+No manual formatting of token+value strings is needed — the extraction handles it.
+
+### Collapsed/Expanded Dimensional Model
+
+The extraction script returns dimensions in a collapsed/expanded format. Use the shape of the data to determine which table rows to emit:
+
+**Padding:** (collapsed based on both value AND token equality — two sides with the same numeric value but different token names stay expanded)
+- Uniform `padding: { value, token, display }` → emit one `padding` row
+- Symmetric `padding: { vertical: {...}, horizontal: {...} }` → emit `verticalPadding` and `horizontalPadding` rows
+- Per-side `padding: { top: {...}, bottom: {...}, start: {...}, end: {...} }` → emit `paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd` rows
+
+**Corner radius:**
+- Uniform `cornerRadius: { value, token, display }` → emit one `cornerRadius` row
+- Per-corner `cornerRadius: { topStart, topEnd, bottomStart, bottomEnd }` → emit individual rows
+
+**Stroke weight:**
+- Uniform `strokeWeight: { value, token, display }` → emit one `borderWidth` row
+- Per-side `strokeWeight: { top, bottom, start, end }` → emit individual rows
+
+**Typography:**
+- Named style `typography: { styleName: "Heading/X Small" }` → emit one `textStyle` row with the style name
+- Inline `typography: { fontSize, fontWeight, lineHeight, ... }` → emit individual property rows
+- Never both — mutual exclusion enforced at extraction time
+
+### Logical Direction Normalization
+
+The extraction uses logical directions instead of physical:
+- `paddingLeft` → `paddingStart`, `paddingRight` → `paddingEnd`
+- Corner radii: `topStart`, `topEnd`, `bottomStart`, `bottomEnd`
+
+This ensures specs are RTL-aware by default. Use logical direction names (`paddingStart`, `paddingEnd`) in table rows.
 
 ### Figma Properties to Inspect
 
 | Figma Property | Where to Find | Structure Spec Property |
 |----------------|---------------|------------------------|
-| **Padding** | Auto Layout > Padding | `verticalPadding`, `horizontalPadding`, `paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd` |
+| **Padding** | Auto Layout > Padding | `padding` (uniform), `verticalPadding` + `horizontalPadding` (symmetric), or `paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd` (per-side) |
 | **Gap / Item spacing** | Auto Layout > Gap between items | `contentSpacing`, `itemSpacing`, `gapBetween` |
 | **Min width / Max width** | Frame > Min W, Max W | `minWidth`, `maxWidth` |
 | **Min height / Max height** | Frame > Min H, Max H | `minHeight`, `maxHeight` |
 | **Fixed width / height** | Frame > W, H (when set to fixed) | `fixedWidth`, `fixedHeight` |
 | **Resizing (Hug/Fill/Fixed)** | Frame > Resizing dropdown | `"hug"`, `"fill"`, or fixed value |
 | **Alignment** | Auto Layout > Alignment controls | `verticalAlignment`, `horizontalAlignment` (values: `"top"`, `"center"`, `"bottom"`, `"left"`, `"right"`, `"spaceBetween"`) |
-| **Corner radius** | Frame > Corner radius | `cornerRadius` (single value or `"full"` for pill) |
-| **Individual corner radii** | Frame > Independent corners | `cornerRadiusTopLeft`, `cornerRadiusTopRight`, etc. |
-| **Stroke width** | Stroke > Weight | `borderWidth`, `strokeWidth` |
+| **Corner radius** | Frame > Corner radius | `cornerRadius` (uniform) or `cornerRadiusTopStart`, `cornerRadiusTopEnd`, etc. (per-corner) |
+| **Stroke width** | Stroke > Weight | `borderWidth` (uniform) or per-side |
 | **Icon size** | Icon frame > W, H | `iconSize`, `leadingIconSize`, `trailingIconSize` |
 | **Clip content (overflow)** | Frame > Clip content toggle | `clipsContent` (`"true"` or `"false"`) |
 | **Layout direction** | Auto Layout > Direction | Note in description if relevant |
 | **Absolute position** | Frame > Constraints | Document offset values if pinned |
-| **Text style** | Text > Style dropdown | `textStyle` (style name like "Heading/X Small") |
-| **Custom typography** | Text > Font, Size, etc. (no style) | `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing` |
+| **Text style** | Text > Style dropdown | `textStyle` (style name like "Heading/X Small") — from `typography.styleName` |
+| **Custom typography** | Text > Font, Size, etc. (no style) | `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing` — from `typography` inline props |
 
 ### Variable Bindings
 When inspecting values, check if they're bound to variables:
@@ -144,26 +176,17 @@ When inspecting values, check if they're bound to variables:
 | Plain number (e.g., `16`) | Hardcoded | `"16"` — just the number, no units |
 | Mixed values in component set | Different per variant | Document each variant's value in the appropriate column |
 
-### Typography Styles
-Text nodes can use a **text style** (semantic) or **custom typography** (hardcoded). Check `textStyleId` on TEXT nodes:
+### Typography (Composite Model)
 
-| Figma UI Indicator | How to Detect | How to Document |
-|--------------------|---------------|-----------------|
-| Style name shown (e.g., "Heading/X Small") | `textStyleId` is non-empty | `"Heading/X Small"` — just the style name |
-| No style, manual values | `textStyleId` is empty string | `"custom"` with note listing values, OR document individual properties |
+The extraction returns typography as a discriminated composite — never both a style name and inline props:
 
-**How to get the style name:**
-```javascript
-const textNode = /* find TEXT node */;
-if (textNode.textStyleId) {
-  const style = await figma.getStyleByIdAsync(textNode.textStyleId);
-  return style.name; // e.g., "Heading/X Small"
-}
-```
+| Extraction output | How to Document |
+|---|---|
+| `typography: { styleName: "Heading/X Small" }` | One `textStyle` row with the style name as the value |
+| `typography: { fontSize: 14, fontWeight: "Medium", lineHeight: 20 }` | Individual rows for `fontSize`, `fontWeight`, `lineHeight` |
+| `typography: null` | No typography rows for this node |
 
-**When documenting typography:**
-- If using a text style: document the style name as the value (e.g., `"Heading/X Small"`)
-- If custom typography: document as `"custom"` with a note, OR create rows for `fontSize`, `fontWeight`, `lineHeight` if they vary by variant
+The mutual exclusion is enforced at extraction time — you never need to decide which representation to use.
 
 ### Organizing into Sections
 
@@ -201,49 +224,28 @@ For sub-components like `leadingContent` that can contain buttons, switches, ico
 1. **Document slot-specific properties** — alignment, inner padding, spacing within the slot
 2. **Use references** — "See Button spec" or "See Icon spec" for nested component internals
 3. **Create a separate section** for each significant sub-component
-4. **Sub-component section previews show the sub-component directly** — not the parent. When a section documents a sub-component (e.g., Label), its preview creates instances from the sub-component's own component set. This shows four Label instances at different sizes, not four full Text Field instances. The sub-component's component set ID (`SUB_COMP_SET_ID`) is recorded during Step 4d via `getMainComponentAsync()` → `mainComponent.parent.id`. Boolean overrides (`SUB_COMP_OVERRIDES`) from the sub-component's own `componentProperties` are applied to each preview instance so optional internal children are visible.
+4. **Sub-component section previews show the sub-component directly** — not the parent. When a section documents a sub-component (e.g., Label), its preview creates instances from the sub-component's own component set. This shows four Label instances at different sizes, not four full Text Field instances. The sub-component's component set ID (`subCompSetId`) and boolean overrides (`booleanOverrides`) are pre-resolved by the enhanced extraction script (Step 4b) in the `subComponents` array — no separate exploration step needed.
 
 ### Sub-Component Discovery
 
-Sub-components are often **hidden behind boolean toggles** in their default state. A Text Field might have Label, Input, and Hint Text sub-components, but Hint Text only appears when a "Show hint" boolean is enabled. The extraction script runs with default property values and will miss these gated elements entirely.
+The enhanced extraction script (Step 4b) handles sub-component discovery automatically at **two levels**:
 
-**You must actively discover sub-components at TWO levels:**
+**Level 1 — Parent component toggles:** The extraction script reads `booleanDefs` from the parent's `propertyDefs`, creates a fully-enabled test instance (all parent booleans set to `true`), and extracts the complete `enrichedTree` with all gated sub-components visible.
 
-**Level 1 — Parent component toggles:**
+**Level 2 — Sub-component instance toggles:** For every INSTANCE child at depth 0 in the enriched tree, the extraction script reads `instance.componentProperties` for BOOLEAN entries and stores them as `booleanOverrides` on each sub-component entry. It also resolves `subCompSetId` (the sub-component's own component set ID) and `subCompVariantAxes` (the sub-component's own variant axes).
 
-1. **Check `propertyDefs`** from the extraction output for all BOOLEAN type properties — these gate optional sub-components and content areas (e.g., "Show leading icon", "Show helper text", "Has trailing content")
-2. **Enable all boolean toggles** on a test instance to see the full component with every possible child visible
-3. **Take a screenshot** after enabling toggles to visually confirm what sub-components appear
+**The `subComponents` array** in the extraction output contains all discovered sub-components with:
+- `name` — the instance name in the parent (e.g., "Label", "Input", "Hint text")
+- `mainComponentName` — the main component's name
+- `subCompSetId` — the sub-component's own component set ID (for preview sourcing)
+- `subCompVariantAxes` — the sub-component's own variant axes (e.g., Size: ["Large", "Medium", "Small"])
+- `booleanOverrides` — boolean properties that gate internal children (e.g., character count, status icons)
+- `dimensions` — the sub-component's own dimensional properties
+- `children` — the sub-component's internal child tree
 
-**Level 2 — Sub-component instance toggles (critical, often missed):**
+**Example:** A Label sub-component might have `booleanOverrides: { "Character count#12013:5": false, "Show icon#12013:0": false }`. The cross-variant script (Step 4d) enables all booleans and measures the sub-component's children across all parent sizes, so the `subComponentDimensions` data includes both the default and toggled-on children.
 
-Each sub-component INSTANCE has its own `componentProperties` — boolean toggles that hide internal children within that sub-component. These are **different from** the parent's `propertyDefs` and are only visible when you inspect the INSTANCE node itself via `instance.componentProperties`.
-
-4. **For each sub-component INSTANCE**, read its `componentProperties` and look for BOOLEAN entries — these gate internal elements like character counts, status icons, trailing actions, etc.
-5. **Enable all sub-component booleans** to reveal hidden internal children, then inspect the full internal tree
-
-**Example:** A Label sub-component might have `Character count#12013:5: false` and `Show icon#12013:0: false` in its own `componentProperties`. These hide a "Character count + icon" frame inside the Label that contains an icon slot and a text counter. The parent Text Field's `propertyDefs` knows nothing about these — they live on the Label instance.
-
-**How to check sub-component instance properties:**
-```javascript
-const subComp = parentInstance.findOne(n => n.name === 'Label' && n.type === 'INSTANCE');
-const props = subComp.componentProperties;
-// Look for BOOLEAN entries — these gate hidden internal elements
-// { "Character count#12013:5": { type: "BOOLEAN", value: false }, "Show icon#12013:0": { type: "BOOLEAN", value: false } }
-```
-
-**What "digging deep" means for sub-components:**
-
-For each sub-component INSTANCE found in the component tree:
-- Get its main component name to understand what it is
-- **Read its `componentProperties`** and list all BOOLEAN toggles — enable each one and inspect what children become visible
-- Extract its internal auto-layout properties (padding, spacing, alignment)
-- Check if it has its own size variants that map to the parent's size axis
-- Look for internal frames and nested children (e.g., a Label sub-component might have "Label text", "Character count + icon" with internal icon and count text children)
-- Measure how these internal properties change across the parent's size variants
-- **Document every visible-when-toggled child** — these are optional elements that engineers still need dimensional specs for
-
-This exploration is what produces the level of detail needed for a thorough structure spec. Without it, sub-component sections will be shallow and miss important structural information.
+No manual `figma_execute` calls are needed for sub-component discovery — the extraction and cross-variant scripts handle it deterministically.
 
 ---
 
@@ -418,14 +420,14 @@ Container          –      –      –     Tap target
 | Value format | Use plain numbers without units: "48", "16", "full", "center". Use "–" for not applicable. |
 | References | Put "See X spec" in `sectionDescription`, not scattered in notes |
 
-## Value Formatting: Tokens vs Hardcoded
+## Value Formatting: Display Strings from Extraction
 
-When documenting values, distinguish between semantic tokens and hardcoded values:
+The extraction script provides pre-formatted `display` strings on every `{ value, token, display }` tuple. Use `display` directly as table cell values — no manual formatting needed.
 
-| Source | Format | Example |
-|--------|--------|---------|
-| Semantic token | `token-name (resolved-value)` | `"spacing-horizontal-xs (8)"` |
-| Hardcoded value | Just the number (no units) | `"8"` |
+| Source | `display` value | Example |
+|--------|-----------------|---------|
+| Semantic token | `"token-name (resolved-value)"` | `"spacing-horizontal-xs (8)"` |
+| Hardcoded value | `"value"` | `"8"` |
 
 **Why:** This helps engineers know whether to use a token reference or a literal value in implementation.
 
@@ -453,14 +455,19 @@ When documenting values, distinguish between semantic tokens and hardcoded value
 | Category | Properties | Typical Values |
 |----------|------------|----------------|
 | Height/Width | `minHeight`, `maxHeight`, `minWidth`, `maxWidth`, `fixedWidth`, `fixedHeight` | `"48"`, `"sizing-md (48)"` |
-| Padding | `horizontalPadding`, `verticalPadding`, `paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd` | `"spacing-md (16)"`, `"12"` |
+| Padding (uniform) | `padding` | `"spacing-md (16)"` |
+| Padding (symmetric) | `horizontalPadding`, `verticalPadding` | `"spacing-md (16)"`, `"12"` |
+| Padding (per-side) | `paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd` | `"spacing-md (16)"`, `"12"` |
 | Spacing | `contentSpacing`, `itemSpacing`, `gapBetween` | `"spacing-sm (8)"`, `"4"` |
 | Alignment | `verticalAlignment`, `horizontalAlignment` | `"top"`, `"center"`, `"bottom"`, `"left"`, `"right"`, `"spaceBetween"` |
 | Sizing mode | `widthMode`, `heightMode` | `"hug"`, `"fill"`, `"fixed"` |
-| Shape | `cornerRadius`, `borderWidth` | `"radius-md (8)"`, `"full"`, `"1"` |
+| Shape (uniform) | `cornerRadius` | `"radius-md (8)"`, `"full"` |
+| Shape (per-corner) | `cornerRadiusTopStart`, `cornerRadiusTopEnd`, `cornerRadiusBottomStart`, `cornerRadiusBottomEnd` | `"radius-sm (4)"` |
+| Border (uniform) | `borderWidth` | `"1"` |
 | Icons | `iconSize`, `leadingIconSize`, `trailingIconSize` | `"icon-sm (16)"`, `"icon-md (20)"`, `"24"` |
 | Slots | `slotWidth`, `slotMinWidth`, `slotMaxWidth` | `"24"`, `"sizing-avatar-sm (40)"` |
-| Typography | `textStyle`, `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing` | `"Heading/X Small"`, `"custom"`, `"14"`, `"500"`, `"20"` |
+| Typography (style) | `textStyle` | `"Heading/X Small"` |
+| Typography (inline) | `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing` | `"14"`, `"500"`, `"20"` |
 | Overflow | `clipsContent` | `"true"`, `"false"` |
 
 ---
@@ -487,17 +494,19 @@ When documenting values, distinguish between semantic tokens and hardcoded value
 - **Under-referencing:** Documenting nested component internals instead of saying "See X spec"
 - **Empty or missing preview:** Not populating the `#Preview` frame with labeled variant instances for the section
 - **Identical previews across sections:** Every section's preview must show instances relevant to that section's axis — a "Size" section should show different sizes, a "Shape" section should show different shapes, a sub-component section should show the sub-component visible at each size. Never use the same default variant for all previews.
-- **Token without value:** Writing `"spacing-md"` instead of `"spacing-md (16)"`
-- **Value without token:** Writing `"16"` when a semantic token like `spacing-md` is used in Figma
+- **Ignoring `display` strings:** Manually formatting `"token-name (value)"` instead of using the `display` field from extraction data. The extraction already provides correctly formatted display strings.
+- **Wrong padding representation:** Using `horizontalPadding` when the extraction returned per-side `{ top, bottom, start, end }`, or using `paddingStart`/`paddingEnd` when the extraction returned uniform `padding`. Match the table row structure to the extraction data shape.
+- **Physical directions instead of logical:** Using `paddingLeft`/`paddingRight` in table rows instead of `paddingStart`/`paddingEnd`. The extraction normalizes to logical directions — use them.
 - **Missing variable modes:** Finding a token binding but not checking if it has multiple mode values (e.g., Density modes). Always use `figma_get_variables` to check if tokens vary by mode.
-- **Missing typography:** Not checking if TEXT nodes use a text style. Always check `textStyleId` and document the style name or note custom typography.
-- **Hidden sub-components not discovered:** Not enabling boolean toggles to reveal sub-components gated behind properties like "Show leading icon" or "Show helper text". Always check `propertyDefs` for BOOLEAN type properties and enable them to see the full component.
-- **Shallow sub-component sections:** Relying solely on the extraction script without exploring sub-component internals. The extraction script provides a baseline, but you must write your own `figma_execute` calls to drill into each sub-component's padding, spacing, text styles, and nested children across size variants.
-- **Missing sub-component internal toggles:** Only checking the parent component's `propertyDefs` for booleans but not checking each sub-component INSTANCE's own `componentProperties`. A Label instance might have `Character count` and `Show icon` booleans that hide internal children — these are invisible in the parent's `propertyDefs`. Always read `instance.componentProperties` on every INSTANCE child and enable all booleans to discover hidden internal elements like counters, icons, and secondary text areas.
-- **Showing parent component in sub-component preview:** Sub-component section previews must show instances from the sub-component's own component set, not the parent. A "Label" section should show four Label instances at different sizes, not four full Text Field instances. Use `SUB_COMP_SET_ID` (recorded in Step 4d) to source preview instances from the correct component set.
-- **Overriding preview frame layout:** The `#Preview` frame's layout properties (layoutMode, sizing, padding, alignment) are defined by the template. Never override them in the script — only set `clipsContent = false`. Changing the preview to HUG or altering its layout causes instance positioning to break.
-- **Missing border/stroke state changes:** Only checking whether a state adds entirely new properties, without checking if an existing border/stroke appears, disappears, or changes weight between states. For example, Interactive Tag has a 1px border in Enabled but no border in Active (uses a filled background instead). Always compare `strokeWeight` and stroke visibility across state variants.
-- **Measurement labels missing property name:** Annotation labels must always include the property name for readability: `"paddingLeft (10)"`, `"itemSpacing (12)"`, `"minHeight (min 32)"`. Never show just the raw value — the property name makes annotations self-descriptive on the canvas.
+- **Missing typography composite:** Not using the `typography` composite from extraction. If `styleName` exists, emit one `textStyle` row. If inline properties exist, emit individual rows. Never both.
+- **Generic notes:** Writing "Tap target" instead of "Meets WCAG 2.5.8 minimum touch target (44px) with 12px optical margin". Notes should explain design intent ("why this value?"), not just describe the property.
+- **No cross-section patterns:** Building each section independently without synthesizing patterns across sections. The AI interpretation layer should identify shared token families, symmetrical slot designs, and scaling strategies.
+- **Ignoring anomalies:** Not flagging scaling inconsistencies, token misconfiguration, or asymmetric padding. The extraction data makes these visible — call them out in notes.
+- **Incomplete sections:** Not verifying that every auto-layout container and sub-component from the extraction has its own section or is covered by a parent section.
+- **Showing parent component in sub-component preview:** Sub-component section previews must show instances from the sub-component's own component set (`subComponents[].subCompSetId`), not the parent. A "Label" section should show four Label instances at different sizes, not four full Text Field instances.
+- **Overriding preview frame layout:** The `#Preview` frame's layout properties are defined by the template. Never override them — only set `clipsContent = false`.
+- **Missing border/stroke state changes:** Only checking whether a state adds entirely new properties, without checking if an existing border/stroke appears, disappears, or changes weight between states. The `stateComparison` data from Step 4d makes this visible.
+- **Measurement labels missing property name:** Annotation labels must always include the property name: `"paddingLeft (10)"`, `"itemSpacing (12)"`, `"minHeight (min 32)"`. Never show just the raw value.
 
 ---
 
@@ -621,22 +630,28 @@ Before rendering into Figma, verify:
 | Check | What to Verify |
 |-------|----------------|
 | ☐ **Variable modes checked** | Used `figma_get_variables` to check if any bound tokens have multiple mode values (Density, Theme, etc.) |
-| ☐ **Parent boolean toggles explored** | Checked `propertyDefs` for BOOLEAN properties, enabled all toggles on a test instance, and discovered all gated sub-components |
-| ☐ **Sub-component instance toggles explored** | For each INSTANCE child, read its `componentProperties` for BOOLEAN entries, enabled all of them, and discovered hidden internal elements (counters, icons, secondary text areas) |
-| ☐ **Sub-components explored** | For each INSTANCE child, wrote targeted `figma_execute` calls to extract internal padding, spacing, dimensions, and text styles across size variants — including children revealed by sub-component boolean toggles |
-| ☐ **Typography documented** | Checked TEXT nodes for `textStyleId`; documented style name or noted custom typography |
+| ☐ **Sub-components discovered** | The `subComponents` array from extraction includes all INSTANCE children found in the enriched tree (with all parent booleans enabled). Each has `subCompSetId`, `subCompVariantAxes`, and `booleanOverrides` pre-resolved. |
+| ☐ **Cross-variant data complete** | The cross-variant script (Step 4d) measured all sub-components across all size values. `subComponentDimensions` has entries for every sub-component at every size. |
+| ☐ **Section plan validated** | The AI interpretation layer (Step 6) built, validated, and adjusted the section plan. Every auto-layout container and sub-component is covered. |
+| ☐ **Design-intent notes** | Notes answer "why this value?" not just "what is this property?". Scaling patterns, WCAG compliance, optical corrections are explained. |
+| ☐ **Anomalies flagged** | Scaling inconsistencies, token misconfiguration, asymmetric padding, missing token bindings are noted in relevant rows or `generalNotes`. |
+| ☐ **Completeness judged** | All dimensional properties from extraction are covered. Gaps are noted in `generalNotes`. |
+| ☐ **Collapsed dimensions correct** | Padding representation matches extraction shape: uniform → `padding`, symmetric → `verticalPadding`/`horizontalPadding`, per-side → `paddingTop`/`paddingBottom`/`paddingStart`/`paddingEnd`. Same for cornerRadius and strokeWeight. |
+| ☐ **Typography as composite** | TEXT nodes with `typography.styleName` → one `textStyle` row. Inline typography → individual property rows. Never both. |
+| ☐ **Display strings used** | Table cell values come from the `display` field in extraction data — no manual token+value formatting. |
+| ☐ **Logical directions** | Padding uses `paddingStart`/`paddingEnd` (not `paddingLeft`/`paddingRight`). Corner radii use `topStart`/`topEnd`/`bottomStart`/`bottomEnd`. |
 | ☐ **Column count** | Each row's values count equals the number of middle columns (total columns minus Spec and Notes) |
-| ☐ **Token format** | Token-bound values use `"token-name (value)"` format, not just the name or just the value |
 | ☐ **Hierarchy markers** | Child rows have `isSubProperty: true`; last child in each group also has `isLastInGroup: true` |
 | ☐ **No units** | Values are plain numbers without px, dp, or pt |
 | ☐ **No placeholders** | No `<value>`, `[TBD]`, or placeholder text — only real measurements |
 | ☐ **Section order** | Composition section first (if applicable), then parent container, sub-components in visual order, state-conditional sections last |
 | ☐ **Notes column** | Every row has a notes value (use "–" if no note needed) |
-| ☐ **Preview per section** | Each section has a distinct preview showing variant instances relevant to that section's axis — no two sections should show identical previews |
-| ☐ **Sub-component preview sourcing** | Sub-component section previews use the sub-component's own component set (`SUB_COMP_SET_ID`), not the parent's. The preview shows the sub-component in isolation (e.g., Label instances), not the full parent component. Boolean overrides (`SUB_COMP_OVERRIDES`) are applied so optional internal children are visible. |
-| ☐ **Preview frame untouched** | The `#Preview` frame's layout properties (layoutMode, sizing, padding, alignment) are NOT overridden by the script — only `clipsContent` is set to `false` |
-| ☐ **Measurement labels descriptive** | All annotation labels use `"propertyName (value)"` format — e.g., `"paddingLeft (10)"`, `"itemSpacing (12)"` — not raw values alone |
-| ☐ **Composition section** | If component is composed of 2+ sub-components with their own size variants, a composition section comes first |
-| ☐ **Behavior variant previews** | If a behavior/configuration axis exists (e.g., Static vs Interactive), the preview shows only the default configuration — one row of instances at each size. Border/stroke differences between configurations are documented as table rows, not duplicated in the preview. |
-| ☐ **State-conditional sections** | If any state introduces new properties not present in the default state, or changes border/stroke presence or weight between states, it has its own section |
+| ☐ **Preview per section** | Each section has a distinct preview showing variant instances relevant to that section's axis |
+| ☐ **Sub-component preview sourcing** | Sub-component section previews use `subComponents[].subCompSetId` from extraction, not the parent's component set. Boolean overrides from `subComponents[].booleanOverrides` (all set to `true`) are applied. |
+| ☐ **Preview frame untouched** | The `#Preview` frame's layout properties are NOT overridden — only `clipsContent` is set to `false` |
+| ☐ **Measurement labels descriptive** | Annotation labels use `"propertyName (value)"` format |
+| ☐ **Composition section** | If component has 2+ sub-components with their own size variants, a composition section comes first |
+| ☐ **Behavior variant previews** | Default configuration only for the preview; border/stroke differences documented as table rows |
+| ☐ **State-conditional sections** | States that introduce new properties or change border/stroke have their own section (detected by `stateComparison` from Step 4d) |
+| ☐ **Cross-section patterns** | `generalNotes` includes system-wide patterns (shared token families, symmetrical slot designs, density scaling strategies) |
 

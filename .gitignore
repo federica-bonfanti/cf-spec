@@ -18,9 +18,7 @@ node_modules/
 *.pem
 
 # MCP configs — may contain access tokens or internal tooling references
-# .mcp.json.bak is a template; users create .mcp.json locally
 .mcp.json
-.mcp.json.bak
 
 # Claude Code local settings — contains user-specific paths and plugins
 .claude/settings.local.json

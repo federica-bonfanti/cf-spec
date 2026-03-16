@@ -22,17 +22,18 @@ Task Progress:
 - [ ] Step 1: Read instruction file
 - [ ] Step 2: Verify MCP connection
 - [ ] Step 3: Read template key from uspecs.config.json
-- [ ] Step 4a-c: Gather baseline (navigate, screenshot, run extraction script, check variable modes)
-- [ ] Step 4d: Deep exploration — write free-form figma_execute calls to enable all boolean toggles, inspect every sub-component's internals across sizes, and discover state-conditional properties
+- [ ] Step 4a: Visual and structural context (navigate, screenshot, file data)
+- [ ] Step 4b: Run enhanced extraction script (sub-components, booleans, tokens, collapsed dimensions)
+- [ ] Step 4c: Check variable modes
+- [ ] Step 4d: Cross-variant dimensional comparison (deterministic script)
 - [ ] Step 5: Navigate to destination (if different file)
-- [ ] Step 6: Identify sections (variant axes, sub-components)
-- [ ] Step 7: Apply columns vs sections decision framework
-- [ ] Step 8: Generate structured data (component name, general notes, sections with columns and rows)
-- [ ] Step 9: Re-read instruction file (Common Mistakes, Do NOT sections) and audit
-- [ ] Step 10: Import and detach the Structure template
-- [ ] Step 11: Fill header fields
-- [ ] Step 12: For each section → render table, determine preview params, populate preview
-- [ ] Step 13: Visual validation
+- [ ] Step 6: AI interpretation layer — build section plan, write design-intent notes, detect anomalies, judge completeness
+- [ ] Step 7: Generate structured data (component name, general notes, sections with columns and rows)
+- [ ] Step 8: Re-read instruction file (Common Mistakes, Do NOT sections) and audit
+- [ ] Step 9: Import and detach the Structure template
+- [ ] Step 10: Fill header fields
+- [ ] Step 11: For each section → render table, determine preview params, populate preview
+- [ ] Step 12: Visual validation
 ```
 
 ### Step 1: Read Instructions
@@ -69,7 +70,7 @@ Navigate to the component file and extract structural data using MCP tools.
 4. `figma_get_component` — Get detailed component data for a specific instance
 5. `figma_get_component_for_development` — Get component data with visual reference
 
-**4b. Run the extraction script** via `figma_execute`. Replace `__NODE_ID__` with the actual node ID:
+**4b. Run the enhanced extraction script** via `figma_execute`. Replace `__NODE_ID__` with the actual node ID. This script performs sub-component discovery, boolean enumeration, token binding resolution, and returns a collapsed/expanded dimensional model with logical direction normalization and pre-formatted display strings.
 
 ```javascript
 const TARGET_NODE_ID = '__NODE_ID__';
@@ -96,51 +97,113 @@ async function resolveTextStyle(textNode) {
   return null;
 }
 
+function makeDisplayString(value, token) {
+  if (token) return token + ' (' + value + ')';
+  return String(value);
+}
+
+function collapsePadding(pT, pB, pS, pE, tT, tB, tS, tE) {
+  const vT = Math.round(pT || 0), vB = Math.round(pB || 0);
+  const vS = Math.round(pS || 0), vE = Math.round(pE || 0);
+  if (vT === vB && vS === vE && vT === vS && tT === tB && tS === tE && tT === tS) {
+    return { value: vT, token: tT || null, display: makeDisplayString(vT, tT) };
+  }
+  if (vT === vB && vS === vE && tT === tB && tS === tE) {
+    return {
+      vertical: { value: vT, token: tT || null, display: makeDisplayString(vT, tT) },
+      horizontal: { value: vS, token: tS || null, display: makeDisplayString(vS, tS) }
+    };
+  }
+  return {
+    top: { value: vT, token: tT || null, display: makeDisplayString(vT, tT) },
+    bottom: { value: vB, token: tB || null, display: makeDisplayString(vB, tB) },
+    start: { value: vS, token: tS || null, display: makeDisplayString(vS, tS) },
+    end: { value: vE, token: tE || null, display: makeDisplayString(vE, tE) }
+  };
+}
+
+function collapseCornerRadius(tl, tr, bl, br, tTL, tTR, tBL, tBR) {
+  if (tl === tr && tr === bl && bl === br && tTL === tTR && tTR === tBL && tBL === tBR) {
+    return { value: tl, token: tTL || null, display: makeDisplayString(tl, tTL) };
+  }
+  return {
+    topStart: { value: tl, token: tTL || null, display: makeDisplayString(tl, tTL) },
+    topEnd: { value: tr, token: tTR || null, display: makeDisplayString(tr, tTR) },
+    bottomStart: { value: bl, token: tBL || null, display: makeDisplayString(bl, tBL) },
+    bottomEnd: { value: br, token: tBR || null, display: makeDisplayString(br, tBR) }
+  };
+}
+
 async function extractDimensions(node) {
   const dims = {};
-  const numericProps = [
-    'width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight',
-    'paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight',
-    'itemSpacing', 'counterAxisSpacing', 'cornerRadius', 'strokeWeight'
-  ];
-  for (const p of numericProps) {
+  const simpleProps = ['width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight', 'itemSpacing', 'counterAxisSpacing'];
+  for (const p of simpleProps) {
     if (node[p] !== undefined && node[p] !== null && node[p] !== figma.mixed) {
       const token = await resolveBinding(node, p);
-      dims[p] = { value: Math.round(node[p]), token: token || null };
+      const v = Math.round(node[p]);
+      dims[p] = { value: v, token: token || null, display: makeDisplayString(v, token) };
     }
   }
-  if (node.cornerRadius === figma.mixed) {
-    for (const c of ['cornerRadiusTopLeft', 'cornerRadiusTopRight', 'cornerRadiusBottomLeft', 'cornerRadiusBottomRight']) {
-      if (node[c] !== undefined) {
-        dims[c] = { value: Math.round(node[c]), token: null };
+
+  const tPT = await resolveBinding(node, 'paddingTop');
+  const tPB = await resolveBinding(node, 'paddingBottom');
+  const tPS = await resolveBinding(node, 'paddingLeft');
+  const tPE = await resolveBinding(node, 'paddingRight');
+  if (node.paddingTop !== undefined || node.paddingBottom !== undefined || node.paddingLeft !== undefined || node.paddingRight !== undefined) {
+    dims.padding = collapsePadding(node.paddingTop, node.paddingBottom, node.paddingLeft, node.paddingRight, tPT, tPB, tPS, tPE);
+  }
+
+  if (node.cornerRadius !== undefined && node.cornerRadius !== null) {
+    if (node.cornerRadius === figma.mixed) {
+      const tTL = await resolveBinding(node, 'topLeftRadius');
+      const tTR = await resolveBinding(node, 'topRightRadius');
+      const tBL = await resolveBinding(node, 'bottomLeftRadius');
+      const tBR = await resolveBinding(node, 'bottomRightRadius');
+      dims.cornerRadius = collapseCornerRadius(
+        Math.round(node.topLeftRadius || 0), Math.round(node.topRightRadius || 0),
+        Math.round(node.bottomLeftRadius || 0), Math.round(node.bottomRightRadius || 0),
+        tTL, tTR, tBL, tBR
+      );
+    } else {
+      const token = await resolveBinding(node, 'cornerRadius');
+      const v = Math.round(node.cornerRadius);
+      dims.cornerRadius = { value: v, token: token || null, display: makeDisplayString(v, token) };
+    }
+  }
+
+  if (node.strokeWeight !== undefined && node.strokeWeight !== null) {
+    if (node.strokeWeight === figma.mixed) {
+      const sides = {};
+      for (const s of ['strokeTopWeight', 'strokeBottomWeight', 'strokeLeftWeight', 'strokeRightWeight']) {
+        if (node[s] !== undefined) {
+          const logicalKey = s.replace('strokeTopWeight', 'top').replace('strokeBottomWeight', 'bottom').replace('strokeLeftWeight', 'start').replace('strokeRightWeight', 'end');
+          sides[logicalKey] = { value: Math.round(node[s]), token: null, display: String(Math.round(node[s])) };
+        }
       }
+      dims.strokeWeight = sides;
+    } else {
+      const token = await resolveBinding(node, 'strokeWeight');
+      const v = Math.round(node.strokeWeight);
+      dims.strokeWeight = { value: v, token: token || null, display: makeDisplayString(v, token) };
     }
   }
+
   if (node.layoutMode && node.layoutMode !== 'NONE') {
-    dims.layoutMode = { value: node.layoutMode, token: null };
+    dims.layoutMode = { value: node.layoutMode, token: null, display: node.layoutMode };
   }
-  if (node.primaryAxisAlignItems) {
-    dims.primaryAxisAlignItems = { value: node.primaryAxisAlignItems, token: null };
-  }
-  if (node.counterAxisAlignItems) {
-    dims.counterAxisAlignItems = { value: node.counterAxisAlignItems, token: null };
-  }
-  if (node.layoutSizingHorizontal) {
-    dims.layoutSizingHorizontal = { value: node.layoutSizingHorizontal, token: null };
-  }
-  if (node.layoutSizingVertical) {
-    dims.layoutSizingVertical = { value: node.layoutSizingVertical, token: null };
-  }
-  if (node.clipsContent !== undefined) {
-    dims.clipsContent = { value: node.clipsContent, token: null };
-  }
+  if (node.primaryAxisAlignItems) dims.primaryAxisAlignItems = { value: node.primaryAxisAlignItems, token: null, display: node.primaryAxisAlignItems };
+  if (node.counterAxisAlignItems) dims.counterAxisAlignItems = { value: node.counterAxisAlignItems, token: null, display: node.counterAxisAlignItems };
+  if (node.layoutSizingHorizontal) dims.layoutSizingHorizontal = { value: node.layoutSizingHorizontal, token: null, display: node.layoutSizingHorizontal };
+  if (node.layoutSizingVertical) dims.layoutSizingVertical = { value: node.layoutSizingVertical, token: null, display: node.layoutSizingVertical };
+  if (node.clipsContent !== undefined) dims.clipsContent = { value: node.clipsContent, token: null, display: String(node.clipsContent) };
+
   return dims;
 }
 
-async function extractTextProps(node) {
+async function extractTypography(node) {
   if (node.type !== 'TEXT') return null;
   const styleName = await resolveTextStyle(node);
-  if (styleName) return { textStyle: styleName };
+  if (styleName) return { styleName };
   const props = {};
   if (typeof node.fontSize === 'number') props.fontSize = node.fontSize;
   if (typeof node.fontName === 'object') {
@@ -156,7 +219,7 @@ async function extractTextProps(node) {
   return Object.keys(props).length > 0 ? props : null;
 }
 
-async function extractChildren(container, depth) {
+async function extractChildren(container, depth, discoverSubComps) {
   if (depth === undefined) depth = 0;
   const children = [];
   for (const child of container.children) {
@@ -167,21 +230,55 @@ async function extractChildren(container, depth) {
       dimensions: await extractDimensions(child)
     };
     if (child.type === 'TEXT') {
-      entry.textProps = await extractTextProps(child);
+      entry.typography = await extractTypography(child);
     }
     if (child.type === 'INSTANCE') {
       try {
         const mc = await child.getMainComponentAsync();
-        if (mc) entry.mainComponentName = mc.name;
+        if (mc) {
+          entry.mainComponentName = mc.name;
+          if (discoverSubComps && depth === 0) {
+            const subCompSet = mc.parent && mc.parent.type === 'COMPONENT_SET' ? mc.parent : null;
+            entry.subCompSetId = subCompSet ? subCompSet.id : mc.id;
+            if (subCompSet && subCompSet.variantGroupProperties) {
+              entry.subCompVariantAxes = {};
+              for (const [k, v] of Object.entries(subCompSet.variantGroupProperties)) {
+                entry.subCompVariantAxes[k] = v.values;
+              }
+            }
+            const instProps = child.componentProperties;
+            if (instProps) {
+              entry.booleanOverrides = {};
+              for (const [key, val] of Object.entries(instProps)) {
+                if (val.type === 'BOOLEAN') entry.booleanOverrides[key] = val.value;
+              }
+            }
+          }
+        }
       } catch {}
     }
     const isTopLevelInstance = depth === 0 && child.type === 'INSTANCE';
     if ('children' in child && child.children.length > 0 && (child.type !== 'INSTANCE' || isTopLevelInstance)) {
-      entry.children = await extractChildren(child, depth + 1);
+      entry.children = await extractChildren(child, depth + 1, false);
     }
     children.push(entry);
   }
   return children;
+}
+
+function buildLayoutTree(node, depth) {
+  if (depth === undefined) depth = 0;
+  if (!('children' in node) || node.children.length === 0) return node.name;
+  const isAutoLayout = node.layoutMode && node.layoutMode !== 'NONE';
+  const childTrees = node.children.map(c => buildLayoutTree(c, depth + 1));
+  if (!isAutoLayout && depth > 0) return childTrees.length === 1 ? childTrees[0] : childTrees;
+  return {
+    name: node.name,
+    layoutMode: node.layoutMode || 'NONE',
+    hasPadding: (node.paddingTop || 0) + (node.paddingBottom || 0) + (node.paddingLeft || 0) + (node.paddingRight || 0) > 0,
+    hasSpacing: (node.itemSpacing || 0) > 0,
+    children: childTrees
+  };
 }
 
 const node = await figma.getNodeByIdAsync(TARGET_NODE_ID);
@@ -190,7 +287,6 @@ if (!node || (node.type !== 'COMPONENT_SET' && node.type !== 'COMPONENT')) {
 }
 
 const isComponentSet = node.type === 'COMPONENT_SET';
-
 const variantAxes = {};
 if (isComponentSet && node.variantGroupProperties) {
   for (const [key, val] of Object.entries(node.variantGroupProperties)) {
@@ -200,15 +296,16 @@ if (isComponentSet && node.variantGroupProperties) {
 
 const propDefs = node.componentPropertyDefinitions;
 const propertyDefs = {};
+const booleanDefs = {};
 if (propDefs) {
   for (const [key, def] of Object.entries(propDefs)) {
     propertyDefs[key] = { type: def.type, defaultValue: def.defaultValue };
     if (def.variantOptions) propertyDefs[key].variantOptions = def.variantOptions;
+    if (def.type === 'BOOLEAN') booleanDefs[key] = def.defaultValue;
   }
 }
 
 const variantChildren = isComponentSet ? node.children : [node];
-
 const defaultValues = {};
 for (const [axis, vals] of Object.entries(variantAxes)) {
   defaultValues[axis] = vals[0];
@@ -226,13 +323,42 @@ for (const [axis, vals] of Object.entries(variantAxes)) {
 const variants = [];
 for (const variant of variantChildren) {
   if (!isComponentSet || selectedVariants.has(variant.name)) {
-    variants.push({
+    const v = {
       name: variant.name,
       dimensions: await extractDimensions(variant),
-      children: await extractChildren(variant)
+      children: await extractChildren(variant, 0, true),
+      layoutTree: buildLayoutTree(variant)
+    };
+    variants.push(v);
+  }
+}
+
+let enrichedTree = null;
+const subComponents = [];
+const defaultVariant = variantChildren[0];
+const testInst = defaultVariant.createInstance();
+if (Object.keys(booleanDefs).length > 0) {
+  const enableAll = {};
+  for (const key of Object.keys(booleanDefs)) enableAll[key] = true;
+  try { testInst.setProperties(enableAll); } catch {}
+}
+enrichedTree = await extractChildren(testInst, 0, true);
+
+for (const child of enrichedTree) {
+  if (child.type === 'INSTANCE' && child.subCompSetId) {
+    subComponents.push({
+      name: child.name,
+      mainComponentName: child.mainComponentName || child.name,
+      subCompSetId: child.subCompSetId,
+      subCompVariantAxes: child.subCompVariantAxes || {},
+      booleanOverrides: child.booleanOverrides || {},
+      dimensions: child.dimensions,
+      children: child.children || [],
+      typography: child.typography || null
     });
   }
 }
+testInst.remove();
 
 return {
   componentName: node.name,
@@ -240,164 +366,264 @@ return {
   isComponentSet,
   variantAxes,
   propertyDefs,
+  booleanDefs,
   variantCount: variantChildren.length,
-  variants
+  variants,
+  enrichedTree,
+  subComponents
 };
 ```
 
-Save the returned JSON. The script extracts **representative variants** — one per value of each axis at default values for other axes — rather than all variants. For a component with Size (4 values) × State (11 values) = 44 total variants, this extracts 4 + 10 = 14 variants instead of 44, keeping output size manageable while preserving full child-tree depth for sub-component analysis. You will use `componentName`, `compSetNodeId`, `variantAxes`, `propertyDefs`, and `variants` in subsequent steps. The `propertyDefs` object contains exact Figma property keys (including `#nodeId` suffixes for booleans) needed for `setProperties()` when placing preview instances.
+Save the returned JSON. The enhanced extraction script provides:
+
+- **Representative variants** — one per value of each axis at default values for other axes (same strategy as before: Size(4) × State(11) = 14 instead of 44).
+- **Collapsed/expanded dimensional model** — `padding` is a single `{ value, token, display }` when all sides equal, `{ vertical, horizontal }` when top==bottom and left==right, or `{ top, bottom, start, end }` with logical directions when sides differ. Same pattern for `cornerRadius` (uniform vs `{ topStart, topEnd, bottomStart, bottomEnd }`) and `strokeWeight` (uniform vs per-side).
+- **Typography as composite** — `typography: { styleName }` when a named text style exists, or `{ fontSize, fontWeight, lineHeight, ... }` for inline values. Never both — mutual exclusion enforced at extraction time.
+- **Pre-formatted display strings** — every dimensional property includes a `display` field: `"token-name (value)"` when token-bound, `"value"` when hardcoded. Use `display` directly in table rows and token maps.
+- **Sub-component discovery** — all top-level INSTANCE children have `subCompSetId`, `subCompVariantAxes`, and `booleanOverrides` populated automatically via `getMainComponentAsync()`.
+- **Enriched tree** — always created from a test instance of the default variant. When parent booleans exist, all are set to `true` to capture elements hidden in defaults. When no booleans exist, the enriched tree still discovers sub-component metadata (subCompSetId, booleanOverrides) that the representative variant children also carry.
+- **Layout tree** — a recursive `layoutTree` on each variant showing auto-layout nesting, which containers have padding/spacing, and the hierarchy of structurally significant frames.
+- **`subComponents` array** — pre-resolved list of discovered sub-components with their component set IDs, own variant axes, boolean overrides, dimensions, and children.
+
+You will use `componentName`, `compSetNodeId`, `variantAxes`, `propertyDefs`, `booleanDefs`, `variants`, `enrichedTree`, `subComponents`, and each variant's `layoutTree` in subsequent steps. The `propertyDefs` object contains exact Figma property keys (including `#nodeId` suffixes for booleans) needed for `setProperties()` when placing preview instances.
 
 **4c. Check variable modes:**
 - `figma_get_variables` — **Critical:** Check if any bound tokens have multiple mode values (e.g., Density: compact/default/spacious). Filter by token prefix to find relevant variables. If the extraction script found tokens in `boundVariables`, query those token names to discover multi-mode collections.
 
 **Scope constraint:** Only analyze the provided node and its children. Do not navigate to other pages or unrelated frames elsewhere in the Figma file.
 
-**4d. Deep exploration — discover and inspect sub-components:**
+**4d. Cross-variant dimensional comparison** — Run this deterministic script via `figma_execute` to systematically compare dimensions across all size/variant values for every discovered sub-component, plus the root component itself. Replace `__NODE_ID__` and `__SUB_COMPONENTS_JSON__` (from the extraction's `subComponents` array) and `__BOOLEAN_DEFS_JSON__` (from `booleanDefs`):
 
-The extraction script provides a structured baseline, but components often hide important sub-elements behind boolean toggles (e.g., "Show leading icon", "Show helper text", "Has hint"). You MUST explore beyond the defaults to produce a thorough structure spec.
-
-**Why this matters:** A Text Field might have a Label, Input, and Hint Text as sub-components, but the Hint Text is hidden behind a boolean toggle in the default state. Without enabling that toggle, the extraction misses the entire sub-component and its internal structure (padding, spacing, text styles). The old output you're trying to match was detailed because the agent explored freely — this step restores that exploration.
-
-**Exploration process:**
-
-1. **Identify boolean properties** from `propertyDefs` in the extraction output. Look for keys with type `"BOOLEAN"` — these gate sub-components and optional content.
-
-2. **Create a fully-enabled test instance** via `figma_execute`: create an instance from the default variant, then call `setProperties()` to enable ALL boolean toggles to `true`. Take a screenshot to see the full component with all sub-components visible.
-
-3. **Inspect each sub-component INSTANCE** found in the extraction's child trees. For each one, write your own `figma_execute` calls to:
-   - Get its main component name and understand what it is
-   - **Record the sub-component's own component set ID** — call `getMainComponentAsync()` on the instance, then read `mainComponent.parent` to get the COMPONENT_SET node. Save `mainComponent.parent.id` as the sub-component's `SUB_COMP_SET_ID`. You will need this in Step 12a to source preview instances from the sub-component's own component set instead of the parent's.
-   - **Read its `componentProperties`** — sub-component instances have their OWN boolean toggles that are separate from the parent's `propertyDefs`. These gate internal children like character counts, status icons, and secondary text. You MUST check these. Save the boolean property keys and their enabled values as `SUB_COMP_OVERRIDES` for use in Step 12a/12c.
-   - **Enable all sub-component booleans** and inspect what children become visible inside — these are optional elements that still need dimensional specs
-   - Extract its internal child tree (padding, spacing, min/max dimensions, text styles, nested frames) — including children revealed by enabling the sub-component's own booleans
-   - Check how its dimensions change across the parent's size variants — create instances at different sizes and measure the sub-component within each
-   - Look for internal structure that the baseline extraction captured at only one depth level
-
-**Example: recording a sub-component's component set ID and overrides:**
 ```javascript
-const compSet = await figma.getNodeByIdAsync('__COMP_SET_NODE_ID__');
-const variant = compSet.children[0];
-const inst = variant.createInstance();
-const subComp = inst.findOne(n => n.name === '__SUB_COMPONENT_NAME__' && n.type === 'INSTANCE');
-if (subComp) {
-  const mc = await subComp.getMainComponentAsync();
-  const subCompSetId = mc.parent && mc.parent.type === 'COMPONENT_SET' ? mc.parent.id : mc.id;
-  const subCompSet = mc.parent && mc.parent.type === 'COMPONENT_SET' ? mc.parent : null;
-  const subAxes = subCompSet ? subCompSet.variantGroupProperties : {};
+const TARGET_NODE_ID = '__NODE_ID__';
+const SUB_COMPONENTS = __SUB_COMPONENTS_JSON__;
+const BOOLEAN_DEFS = __BOOLEAN_DEFS_JSON__;
+const VARIANT_AXES = __VARIANT_AXES_JSON__;
 
-  const props = subComp.componentProperties;
-  const boolOverrides = {};
-  for (const [key, val] of Object.entries(props)) {
-    if (val.type === 'BOOLEAN') boolOverrides[key] = true;
+function makeDisplay(value, token) {
+  if (token) return token + ' (' + value + ')';
+  return String(value);
+}
+
+async function resolveBinding(node, prop) {
+  const bindings = node.boundVariables;
+  if (!bindings || !bindings[prop]) return null;
+  const binding = Array.isArray(bindings[prop]) ? bindings[prop][0] : bindings[prop];
+  if (!binding?.id) return null;
+  try {
+    const v = await figma.variables.getVariableByIdAsync(binding.id);
+    if (v) return v.name;
+  } catch {}
+  return null;
+}
+
+function collapsePadding(pT, pB, pS, pE, tT, tB, tS, tE) {
+  const vT = Math.round(pT || 0), vB = Math.round(pB || 0);
+  const vS = Math.round(pS || 0), vE = Math.round(pE || 0);
+  if (vT === vB && vS === vE && vT === vS && tT === tB && tS === tE && tT === tS) {
+    return { value: vT, token: tT || null, display: makeDisplay(vT, tT) };
+  }
+  if (vT === vB && vS === vE && tT === tB && tS === tE) {
+    return {
+      vertical: { value: vT, token: tT || null, display: makeDisplay(vT, tT) },
+      horizontal: { value: vS, token: tS || null, display: makeDisplay(vS, tS) }
+    };
+  }
+  return {
+    top: { value: vT, token: tT || null, display: makeDisplay(vT, tT) },
+    bottom: { value: vB, token: tB || null, display: makeDisplay(vB, tB) },
+    start: { value: vS, token: tS || null, display: makeDisplay(vS, tS) },
+    end: { value: vE, token: tE || null, display: makeDisplay(vE, tE) }
+  };
+}
+
+function collapseCornerRadius(tl, tr, bl, br, tTL, tTR, tBL, tBR) {
+  if (tl === tr && tr === bl && bl === br && tTL === tTR && tTR === tBL && tBL === tBR) {
+    return { value: tl, token: tTL || null, display: makeDisplay(tl, tTL) };
+  }
+  return {
+    topStart: { value: tl, token: tTL || null, display: makeDisplay(tl, tTL) },
+    topEnd: { value: tr, token: tTR || null, display: makeDisplay(tr, tTR) },
+    bottomStart: { value: bl, token: tBL || null, display: makeDisplay(bl, tBL) },
+    bottomEnd: { value: br, token: tBR || null, display: makeDisplay(br, tBR) }
+  };
+}
+
+async function measureNode(node) {
+  const m = {};
+  const props = ['width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight', 'itemSpacing', 'counterAxisSpacing'];
+  for (const p of props) {
+    if (node[p] !== undefined && node[p] !== null && node[p] !== figma.mixed) {
+      const token = await resolveBinding(node, p);
+      const v = Math.round(node[p]);
+      m[p] = { value: v, token: token || null, display: makeDisplay(v, token) };
+    }
   }
 
-  inst.remove();
-  return { subCompSetId, subAxes, boolOverrides };
-}
-inst.remove();
-return { error: 'Sub-component not found' };
-```
-Save the returned `subCompSetId` and `boolOverrides` for each sub-component — these map directly to `SUB_COMP_SET_ID` and `SUB_COMP_OVERRIDES` in Step 12a's decision table.
-
-4. **Check state-conditional properties** by comparing variants across states (e.g., default vs selected, enabled vs focused). Write `figma_execute` calls to inspect specific state variants and note any properties that only appear in certain states (e.g., an inner border on focus).
-
-5. **Document your findings**: Keep notes on each sub-component's internal structure, which boolean toggles reveal which elements, and any state-conditional properties discovered. You will use this in Step 6 to plan sections and in Step 8 to populate the structured data.
-
-**Example exploration calls:**
-
-To create a fully-enabled instance and see all sub-components:
-```javascript
-const compSet = await figma.getNodeByIdAsync('__COMP_SET_NODE_ID__');
-const defaultVariant = compSet.children[0];
-const inst = defaultVariant.createInstance();
-
-// Enable all boolean toggles using exact keys from propertyDefs
-inst.setProperties({
-  'Show leading icon#12345:67': true,
-  'Show helper text#12345:89': true,
-  // ... all boolean properties from propertyDefs
-});
-
-// Now extract the full child tree of this enriched instance
-function getTree(node, depth) {
-  const entry = { name: node.name, type: node.type, visible: node.visible };
-  if (node.layoutMode && node.layoutMode !== 'NONE') {
-    entry.padding = { top: node.paddingTop, bottom: node.paddingBottom, left: node.paddingLeft, right: node.paddingRight };
-    entry.itemSpacing = node.itemSpacing;
+  const tPT = await resolveBinding(node, 'paddingTop');
+  const tPB = await resolveBinding(node, 'paddingBottom');
+  const tPS = await resolveBinding(node, 'paddingLeft');
+  const tPE = await resolveBinding(node, 'paddingRight');
+  if (node.paddingTop !== undefined || node.paddingBottom !== undefined || node.paddingLeft !== undefined || node.paddingRight !== undefined) {
+    m.padding = collapsePadding(node.paddingTop, node.paddingBottom, node.paddingLeft, node.paddingRight, tPT, tPB, tPS, tPE);
   }
-  if (node.minHeight) entry.minHeight = node.minHeight;
-  if (node.minWidth) entry.minWidth = node.minWidth;
-  if ('children' in node && node.children.length > 0) {
-    entry.children = node.children.map(c => getTree(c, depth + 1));
+
+  if (node.cornerRadius !== undefined && node.cornerRadius !== null) {
+    if (node.cornerRadius === figma.mixed) {
+      const tTL = await resolveBinding(node, 'topLeftRadius');
+      const tTR = await resolveBinding(node, 'topRightRadius');
+      const tBL = await resolveBinding(node, 'bottomLeftRadius');
+      const tBR = await resolveBinding(node, 'bottomRightRadius');
+      m.cornerRadius = collapseCornerRadius(
+        Math.round(node.topLeftRadius || 0), Math.round(node.topRightRadius || 0),
+        Math.round(node.bottomLeftRadius || 0), Math.round(node.bottomRightRadius || 0),
+        tTL, tTR, tBL, tBR
+      );
+    } else {
+      const token = await resolveBinding(node, 'cornerRadius');
+      const v = Math.round(node.cornerRadius);
+      m.cornerRadius = { value: v, token: token || null, display: makeDisplay(v, token) };
+    }
   }
-  return entry;
+
+  if (node.strokeWeight !== undefined && node.strokeWeight !== null) {
+    if (node.strokeWeight === figma.mixed) {
+      const sides = {};
+      for (const s of ['strokeTopWeight', 'strokeBottomWeight', 'strokeLeftWeight', 'strokeRightWeight']) {
+        if (node[s] !== undefined) {
+          const logicalKey = s.replace('strokeTopWeight', 'top').replace('strokeBottomWeight', 'bottom').replace('strokeLeftWeight', 'start').replace('strokeRightWeight', 'end');
+          sides[logicalKey] = { value: Math.round(node[s]), token: null, display: String(Math.round(node[s])) };
+        }
+      }
+      m.strokeWeight = sides;
+    } else {
+      const token = await resolveBinding(node, 'strokeWeight');
+      const v = Math.round(node.strokeWeight);
+      m.strokeWeight = { value: v, token: token || null, display: makeDisplay(v, token) };
+    }
+  }
+
+  if (node.layoutMode && node.layoutMode !== 'NONE') m.layoutMode = { value: node.layoutMode, token: null, display: node.layoutMode };
+  if (node.layoutSizingHorizontal) m.layoutSizingHorizontal = { value: node.layoutSizingHorizontal, token: null, display: node.layoutSizingHorizontal };
+  if (node.layoutSizingVertical) m.layoutSizingVertical = { value: node.layoutSizingVertical, token: null, display: node.layoutSizingVertical };
+
+  if (node.type === 'TEXT') {
+    if (node.textStyleId && typeof node.textStyleId === 'string' && node.textStyleId !== '') {
+      try {
+        const style = await figma.getStyleByIdAsync(node.textStyleId);
+        if (style) m.typography = { styleName: style.name };
+      } catch {}
+    } else {
+      const typo = {};
+      if (typeof node.fontSize === 'number') typo.fontSize = node.fontSize;
+      if (typeof node.fontName === 'object') typo.fontWeight = node.fontName.style;
+      if (node.lineHeight && typeof node.lineHeight === 'object' && node.lineHeight.unit !== 'AUTO') typo.lineHeight = node.lineHeight.value;
+      if (Object.keys(typo).length > 0) m.typography = typo;
+    }
+  }
+  return m;
 }
 
-const tree = getTree(inst, 0);
-inst.remove();
-return tree;
-```
-
-To discover a sub-component's own boolean toggles and hidden internal children:
-```javascript
-const compSet = await figma.getNodeByIdAsync('__COMP_SET_NODE_ID__');
-const variant = compSet.children.find(v => {
-  const vp = v.variantProperties || {};
-  return vp['Size'] === 'Large' && vp['State'] === 'Enabled';
-});
-const subComp = variant.findOne(n => n.name === '__SUB_COMPONENT_NAME__' && n.type === 'INSTANCE');
-
-// CRITICAL: Read the sub-component's own componentProperties — separate from parent's propertyDefs
-const props = subComp.componentProperties;
-const booleanProps = {};
-for (const [key, val] of Object.entries(props)) {
-  if (val.type === 'BOOLEAN') booleanProps[key] = val.value;
-}
-// booleanProps might reveal: { "Character count#12013:5": false, "Show icon#12013:0": false }
-
-// Enable all booleans to see hidden children
-if (Object.keys(booleanProps).length > 0) {
-  const enableAll = {};
-  for (const key of Object.keys(booleanProps)) enableAll[key] = true;
-  subComp.setProperties(enableAll);
+async function measureChildren(container, enableBools) {
+  if (enableBools && Object.keys(enableBools).length > 0) {
+    try { container.setProperties(enableBools); } catch {}
+  }
+  const result = {};
+  for (const child of container.children) {
+    if (!child.visible && !enableBools) continue;
+    result[child.name] = await measureNode(child);
+    if ('children' in child && child.children.length > 0 && child.type !== 'INSTANCE') {
+      const nested = {};
+      for (const gc of child.children) {
+        if (gc.visible) nested[gc.name] = await measureNode(gc);
+      }
+      if (Object.keys(nested).length > 0) result[child.name + '.__children'] = nested;
+    }
+  }
+  return result;
 }
 
-// Now inspect the full child tree with all internal elements visible
-const children = subComp.children.map(c => ({
-  name: c.name, type: c.type, visible: c.visible,
-  width: Math.round(c.width), height: Math.round(c.height),
-  itemSpacing: c.itemSpacing || 0
-}));
-return { booleanProps, children };
-```
+const compSet = await figma.getNodeByIdAsync(TARGET_NODE_ID);
+if (!compSet) return { error: 'Node not found' };
+const isCS = compSet.type === 'COMPONENT_SET';
+const allVariants = isCS ? compSet.children : [compSet];
+const axes = {};
+if (isCS && compSet.variantGroupProperties) {
+  for (const [k, v] of Object.entries(compSet.variantGroupProperties)) axes[k] = v.values;
+}
 
-To inspect a specific sub-component across sizes:
-```javascript
-const compSet = await figma.getNodeByIdAsync('__COMP_SET_NODE_ID__');
-const results = [];
-for (const variant of compSet.children) {
-  const vp = variant.variantProperties || {};
-  // Only check size variants at default state
-  if (vp['State'] && vp['State'] !== 'Enabled') continue;
+const sizeAxis = Object.keys(axes).find(a => /size/i.test(a));
+const stateAxis = Object.keys(axes).find(a => /state/i.test(a));
+
+const defaultValues = {};
+for (const [axis, vals] of Object.entries(axes)) {
+  defaultValues[axis] = vals[0];
+}
+
+const rootDimensions = {};
+const subComponentDimensions = {};
+
+const sizeValues = sizeAxis ? axes[sizeAxis] : [null];
+for (const sizeVal of sizeValues) {
+  const targetProps = { ...defaultValues };
+  if (sizeAxis && sizeVal) targetProps[sizeAxis] = sizeVal;
+
+  const variant = isCS ? allVariants.find(v => {
+    const vp = v.variantProperties || {};
+    return Object.entries(targetProps).every(([k, val]) => vp[k] === val);
+  }) : allVariants[0];
+  if (!variant) continue;
+
+  const label = sizeVal || variant.name;
+  rootDimensions[label] = await measureNode(variant);
+
   const inst = variant.createInstance();
-  // Enable the sub-component toggle if needed
-  // inst.setProperties({ 'Show helper text#12345:89': true });
-  const subComp = inst.findOne(n => n.name === '__SUB_COMPONENT_NAME__');
-  if (subComp) {
-    results.push({
-      size: vp['Size'] || variant.name,
-      padding: { top: subComp.paddingTop, bottom: subComp.paddingBottom, left: subComp.paddingLeft, right: subComp.paddingRight },
-      itemSpacing: subComp.itemSpacing,
-      minHeight: subComp.minHeight,
-      children: subComp.children.map(c => ({ name: c.name, type: c.type, visible: c.visible, width: c.width, height: c.height }))
-    });
+  const enableAll = {};
+  for (const key of Object.keys(BOOLEAN_DEFS)) enableAll[key] = true;
+  try { inst.setProperties(enableAll); } catch {}
+
+  for (const sc of SUB_COMPONENTS) {
+    const subInst = inst.findOne(n => n.name === sc.name && n.type === 'INSTANCE');
+    if (subInst) {
+      if (!subComponentDimensions[sc.name]) subComponentDimensions[sc.name] = {};
+      const boolOverrides = {};
+      for (const key of Object.keys(sc.booleanOverrides || {})) boolOverrides[key] = true;
+      subComponentDimensions[sc.name][label] = {
+        self: await measureNode(subInst),
+        children: await measureChildren(subInst, boolOverrides)
+      };
+    }
   }
   inst.remove();
 }
-return results;
+
+let stateComparison = null;
+if (stateAxis && axes[stateAxis].length > 1) {
+  stateComparison = {};
+  for (const stateVal of axes[stateAxis]) {
+    const targetProps = { ...defaultValues, [stateAxis]: stateVal };
+    const variant = allVariants.find(v => {
+      const vp = v.variantProperties || {};
+      return Object.entries(targetProps).every(([k, val]) => vp[k] === val);
+    });
+    if (variant) stateComparison[stateVal] = await measureNode(variant);
+  }
+}
+
+return {
+  rootDimensions,
+  subComponentDimensions,
+  stateComparison,
+  sizeAxis: sizeAxis || null,
+  stateAxis: stateAxis || null
+};
 ```
 
-These are examples — write whatever queries you need to fully understand the component. The goal is to have complete knowledge of every sub-component's internal structure before moving to section planning.
+Save the returned JSON. Replace `__VARIANT_AXES_JSON__` with the `variantAxes` object from Step 4b extraction. This script provides:
+- **`rootDimensions`** — keyed by size/variant label, full measurements of the root component at each size (at default state and default values for all other axes). Uses the same representative variant strategy as Step 4b — only one variant per size value, not all permutations.
+- **`subComponentDimensions`** — keyed by sub-component name, then by size label, with `self` (the sub-component's own measurements) and `children` (its internal children's measurements, with booleans enabled). Every sub-component discovered in Step 4b is measured across all sizes.
+- **`stateComparison`** — measurements of the root at the default size across all state values. Use this to detect state-conditional properties (e.g., border appears on focus).
+- All measurements use the same collapsed dimensional model as Step 4b: `padding` as uniform / `{ vertical, horizontal }` / `{ top, bottom, start, end }`, collapsed `cornerRadius`, collapsed `strokeWeight`, and `typography` as composite `{ styleName }` or `{ fontSize, fontWeight, ... }`.
 
 ### Step 5: Navigate to Destination
 
@@ -406,60 +632,131 @@ If the user provided a separate destination file URL:
 
 If no destination was provided, stay in the current file.
 
-### Step 6: Identify Sections
+### Step 6: AI Interpretation Layer
 
-Check for three types of dimensional variation:
+This is the core quality step. You have complete, structured data from Steps 4b-4d. Instead of writing `figma_execute` queries, you focus on high-value reasoning tasks that directly improve spec quality for engineers.
 
-**A. Explicit variant axes** (from `variantGroupProperties`):
-- Size variants (Large/Medium/Small/XSmall)
-- Shape variants (Rectangular/Rounded)
+**Input:** The extraction data (4b), cross-variant dimensional comparison (4d), and variable mode data (4c).
 
-**B. Variable collection modes** (from `figma_get_variables`):
-- Density modes (Compact/Default/Spacious)
-- Theme modes if they affect dimensions
+**A. Build the section plan:**
 
-**C. Sub-components:**
-- Each direct INSTANCE child of the variant (e.g., Label, Input, Hint text) is a sub-component that should get its own dedicated section documenting its full internal structure — padding, spacing, minHeight, text styles, icon sizes, and any nested child frames (like "Input text", "Leading content", "Trailing content"). Use both the baseline extraction data AND the deep exploration findings from Step 4d. Include sub-components discovered by enabling boolean toggles — even if they were hidden in the default state.
+Apply these deterministic rules to the extraction and cross-variant data, then validate and adjust the result using your judgment about the component's actual structure.
 
-**D. Composition** (for compound components):
-- Is this component composed of 2+ sub-components that have their own size variants?
-- If yes, add a composition section first (see instruction file)
+**Rules (apply in order):**
 
-**E. State-conditional properties:**
-- Does any state introduce new properties not present in the default state (e.g., inner border on focus)?
-- Does any state change border/stroke visibility or weight compared to the default state?
-- If yes to either, create a dedicated section for that state (see instruction file)
+1. **Variant axes with purely numeric differences → columns.** For each variant axis from `variantAxes`, compare `rootDimensions` across values. If all values have the same set of properties and differ only numerically, make this axis a set of columns (e.g., Size → "Large", "Medium", "Small", "XSmall" columns).
 
-**F. Behavior/Configuration variants:**
-- Does a variant axis control visual configuration (e.g., Static vs Interactive, Read-only vs Editable) rather than just size/density?
-- Do the configurations look visibly different — different strokes/borders, different optional elements visible, different visual weight?
-- If yes: use just the default configuration (e.g., Static) for the preview — one row of instances at each size is sufficient to illustrate the dimensional properties. If border/stroke differs between configurations, add a row documenting the difference. If dimensional values are otherwise identical, document them once with a note indicating the values apply to both configurations.
+2. **Sub-components → separate sections.** Each entry in `subComponents` gets its own section. The section's columns match the parent's size axis (or the sub-component's own size axis if it has one). Use `subComponentDimensions[name]` for the row data.
 
-### Step 7: Apply Decision Framework
+3. **2+ sub-components with own size variants → composition section.** If `subComponents` has 2+ entries where `subCompVariantAxes` contains a size-like axis, create a composition section as the first section. Map parent size → sub-component variant for each sub-component.
 
-For each variant axis, ask:
-- Do all variants have the **same properties**? → Columns
-- Are differences **purely numeric**? → Columns
-- Need **prose explanation**? → Separate section
-- **Conditional properties**? → Separate section
+4. **State axis with new properties → state-conditional section.** Compare `stateComparison` entries: if any state introduces a property not present in the default state (especially `strokeWeight` appearing or changing), create a state-conditional section.
 
-### Step 8: Generate Structured Data
+5. **Layout tree for container hierarchy.** Use the `layoutTree` from the default variant to identify which containers are structurally significant (have their own padding/spacing). Containers that are pass-through wrappers (no padding, no spacing, single child) can be omitted.
 
-Follow the schema in the instruction file. Build the data as a structured object with:
+**Produce a `sectionPlan` array** with this shape:
+```
+sectionPlan = [
+  {
+    sectionType: "composition" | "variant" | "subComponent" | "stateConditional",
+    sectionName: string,
+    sectionDescription: string | null,
+    columns: string[],           // e.g., ["Spec", "Large", "Medium", "Small", "Notes"]
+    subCompSetId: string | null, // for subComponent sections
+    booleanOverrides: object,    // for subComponent sections
+    variantAxis: string | null,  // axis name for variant sections
+    dataSource: string           // "rootDimensions" | "subComponentDimensions.Name" | "stateComparison"
+  },
+  ...
+]
+```
+
+**Ordering:** Composition section first (if any), then root/variant sections, then sub-component sections in the order they appear in the enriched tree (visual order: leading → middle → trailing), then state-conditional sections last.
+
+**Then validate the plan against the full data:**
+- Does every auto-layout container in the extraction have its padding and spacing covered by a section?
+- Does every sub-component discovered in the `enrichedTree` have a section?
+- Are there dimensional properties in the extraction that are not included in any section (and should they be)?
+- Should any sections be merged, split, or reordered based on the component's actual structure?
+- For behavior/configuration variant axes (e.g., Static vs Interactive): use the default configuration for the preview. If border/stroke differs between configurations, add a row — don't create a separate section unless the property sets are fundamentally different.
+
+Produce the final `sectionPlan` with any adjustments.
+
+**B. Write design-intent notes:**
+
+For each property row you will generate, write notes that answer **"why this value?"** not just **"what is this property?"**. You have full dimensional data across all variants and sub-components — use it.
+
+| Instead of this | Write this |
+|---|---|
+| "Tap target" | "Meets WCAG 2.5.8 minimum touch target (44px) with 12px optical margin" |
+| "Inset from edges" | "Accommodates multi-line secondary text at spacious density" |
+| "Pill shape" | "Uses half of minHeight — pill shape scales with container height" |
+| "Icon size" | "Matches platform icon grid (20dp Android, 20pt iOS)" |
+| "Gap between icon and label" | "Scales with size axis: 4→6→8→8 maintains optical balance at each size" |
+
+Use the cross-variant data to identify scaling patterns and explain them in notes.
+
+**C. Cross-section pattern recognition:**
+
+After reviewing all sections together, identify and document:
+- **General notes** describing system-wide patterns: e.g., "All sub-components share the `spacing-inset-*` token family for horizontal padding, scaling from 12 (compact) to 20 (spacious)"
+- **Consistency observations** in section descriptions: e.g., "Leading and trailing content slots have identical minWidth and alignment — designed as symmetrical containers"
+- **Cross-references between sections** when one section's values explain another's: e.g., "Composition section shows Label uses `small` variant at XSmall parent size — this is why the Label section's XSmall column has different padding than other sizes"
+
+These observations go into `generalNotes` and `sectionDescription` fields.
+
+**D. Anomaly detection:**
+
+Before generating structured data, scan the extraction and cross-variant data for:
+- **Scaling inconsistencies:** A sub-component whose minHeight doesn't scale with the parent's size axis — intentional or a design bug? Flag in notes.
+- **Token misconfiguration:** A token binding that resolves to the same value across all density modes — the token exists but doesn't differentiate. Note it.
+- **Asymmetric padding without explanation:** paddingStart=16, paddingEnd=12 — optical correction or mistake? If intentional, the note should explain why.
+- **Missing token bindings:** A hardcoded value surrounded by token-bound siblings — was the binding missed, or is it intentionally hardcoded? Flag for engineering awareness.
+- **Stroke/border state changes:** Compare `stateComparison` data — does a border appear, disappear, or change weight between states? Flag as a state-conditional section candidate if not already in the plan.
+
+Add anomaly notes to the relevant row's `notes` field or to `generalNotes` for component-wide issues.
+
+**E. Completeness judgment:**
+
+Before proceeding, verify:
+- Does every auto-layout container in the extraction have its padding and spacing documented in a section row?
+- Does every sub-component discovered in the `enrichedTree` have its own section?
+- Are there dimensional properties present in `rootDimensions` or `subComponentDimensions` that were not included in any row?
+- For composition sections: does every sub-component's size mapping cover all parent sizes?
+- Are typography styles documented for every TEXT node in the enriched tree?
+
+If gaps exist that cannot be filled from the extraction data, add a note in `generalNotes`: e.g., "Trailing content slot dimensions not documented — slot was empty in all inspected variants."
+
+### Step 7: Generate Structured Data
+
+Using the section plan from Step 6 and the complete dimensional data from Steps 4b-4d, build the structured data object.
+
+Follow the schema in the instruction file:
 - `componentName`: string
-- `generalNotes`: string (optional)
+- `generalNotes`: string (optional) — include cross-section patterns and component-wide anomalies from Step 6
 - `sections`: array, each with:
   - `sectionName`: string
-  - `sectionDescription`: string (optional)
+  - `sectionDescription`: string (optional) — include structural rationale from Step 6, not generic labels
   - `columns`: string[] (first is always "Spec" or "Composition", last is always "Notes")
-  - `rows`: array, each with `spec`, `values` (array matching columns.length - 2), `notes`, optional `isSubProperty`, `isLastInGroup`
+  - `rows`: array, each with `spec`, `values` (array matching columns.length - 2), `notes` (design-intent from Step 6), optional `isSubProperty`, `isLastInGroup`
+
+**Populating rows from dimensional data:**
+
+For each section in the plan:
+- Look up the `dataSource` to find the right dimensional data object (`rootDimensions`, `subComponentDimensions.Name`, or `stateComparison`).
+- For each column value (e.g., "Large", "Medium"), read the measurements at that key.
+- Use the `display` field directly from the dimensional data as the cell value — this already handles `"token-name (value)"` vs `"value"` formatting.
+- For collapsed padding: if `padding` is a single value, emit one `padding` row. If `{ vertical, horizontal }`, emit `verticalPadding` and `horizontalPadding` rows. If `{ top, bottom, start, end }`, emit individual `paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd` rows.
+- For collapsed cornerRadius: if uniform, emit one `cornerRadius` row. If per-corner, emit `cornerRadiusTopStart`, `cornerRadiusTopEnd`, etc.
+- For typography: if `{ styleName }`, emit one `textStyle` row with the style name. If inline properties, emit `fontSize`, `fontWeight`, `lineHeight` rows.
 
 Ensure:
 - First column is always "Spec" (or "Composition" for composition sections), last is always "Notes"
 - `values` array length matches `columns.length - 2`
 - Use `isSubProperty: true` for child properties
+- Notes contain design-intent reasoning from Step 6, not generic descriptions
 
-### Step 9: Audit
+### Step 8: Audit
 
 Re-read the instruction file, focusing on:
 - **Common Mistakes** section
@@ -468,7 +765,7 @@ Re-read the instruction file, focusing on:
 
 Check your output against each rule. Fix any violations.
 
-### Step 10: Import and Detach Template
+### Step 9: Import and Detach Template
 
 Run via `figma_execute` (replace `__STRUCTURE_TEMPLATE_KEY__` with the key from Step 3, and `__COMPONENT_NAME__` with the component name):
 
@@ -491,7 +788,7 @@ Save the returned `frameId` — you need it for all subsequent steps.
 
 **Cross-file note:** If the component is in a different file than the destination, the extraction script (Step 4b) must run in the component's file before navigating to the destination (Step 5). The template import above uses `importComponentByKeyAsync` which works across files.
 
-### Step 11: Fill Header Fields
+### Step 10: Fill Header Fields
 
 Run via `figma_execute` (replace `__FRAME_ID__`, `__COMPONENT_NAME__`, and `__GENERAL_NOTES__`):
 
@@ -533,11 +830,11 @@ return { success: true };
 
 Replace `__HAS_GENERAL_NOTES__` with `true` or `false`. If `false`, the general notes frame is hidden.
 
-### Step 12: Render Sections (table + preview per section)
+### Step 11: Render Sections (table + preview per section)
 
-Process **one section at a time**, completing both the table and its preview before moving to the next section. For each section, perform sub-steps 12a, 12b, and 12c in order.
+Process **one section at a time**, completing both the table and its preview before moving to the next section. For each section, perform sub-steps 11a, 11b, and 11c in order.
 
-#### Step 12a: Determine preview parameters for this section
+#### Step 11a: Determine preview parameters for this section
 
 Before rendering, determine the preview configuration for the current section. This is **mandatory** — every section needs its own preview showing relevant variant instances.
 
@@ -548,21 +845,22 @@ Before rendering, determine the preview configuration for the current section. T
 | **Size/variant** (columns are size names like Large, Medium, Small) | `''` | The axis name (e.g., `"Size"`) | Size names from the axis | `[]` | `[]` | Build from section rows |
 | **Density** (columns are density modes from variable collections) | `''` | `''` | Mode names (e.g., `["Compact", "Default", "Spacious"]`) | `[]` | `[]` | Build from section rows |
 | **Shape** (columns are shape variants) | `''` | The axis name (e.g., `"Shape"`) | Shape names from the axis | `[]` | `[]` | `[]` unless section has token-mapped rows |
-| **Sub-component** (columns are size names showing a specific child) | The sub-component's own component set ID (recorded during Step 4d via `mainComponent.parent.id`) | The sub-component's size axis name (from its own component set's `variantGroupProperties`) | Size names from the sub-component's own size axis | `[]` | Boolean properties to enable on each sub-component instance so all internal children are visible (from `instance.componentProperties` discovered in Step 4d) | Build from section rows |
+| **Sub-component** (columns are size names showing a specific child) | The sub-component's own component set ID (from `subComponents[].subCompSetId` in Step 4b extraction) | The sub-component's size axis name (from `subComponents[].subCompVariantAxes`) | Size names from the sub-component's own size axis | `[]` | Boolean properties to enable on each sub-component instance so all internal children are visible (from `subComponents[].booleanOverrides` in Step 4b — set all values to `true`) | Build from section rows |
 | **Composition** (columns show sub-component variant mappings) | `''` | `''` | Size names | Configure each column's specific property combination | `[]` | `[]` |
 | **Behavior/Configuration** (columns are size names) | `''` | Size axis name | Size names from the axis | `[]` (use default configuration only) | `[]` | Build from section rows |
 | **State-conditional** (columns show default vs active state) | `''` | `''` | State names | Set state variant property per column | `[]` | `[]` unless section has dimensional rows |
 
-**Sub-component preview sourcing:** When `SUB_COMP_SET_ID` is non-empty, the preview script creates instances from the **sub-component's own component set** instead of the parent's `COMP_SET_ID`. This ensures sub-component section previews show the sub-component in isolation (e.g., four Label instances at different sizes) rather than four full parent component instances. The `SUB_COMP_OVERRIDES` parameter specifies boolean properties to enable on each sub-component instance after creation, so optional internal children (e.g., character count, status icon) are visible in the preview.
+**Sub-component preview sourcing:** When `SUB_COMP_SET_ID` is non-empty, the preview script creates instances from the **sub-component's own component set** instead of the parent's `COMP_SET_ID`. This ensures sub-component section previews show the sub-component in isolation (e.g., four Label instances at different sizes) rather than four full parent component instances. The `SUB_COMP_OVERRIDES` parameter specifies boolean properties to enable on each sub-component instance after creation, so optional internal children (e.g., character count, status icon) are visible in the preview. Both `subCompSetId` and `booleanOverrides` are pre-resolved by the enhanced extraction script (Step 4b) — no additional `figma_execute` exploration is needed to discover them.
 
-**Token map construction:**
+**Token map construction from extraction data:**
 
-For each column in the section, build a `tokenMap` object that maps Figma property names to their display string from the table row. This ensures annotation labels match exactly what the table shows (including token names where applicable).
+Because the extraction and cross-variant scripts return pre-formatted `display` strings on every dimensional property, the token maps can be built directly from the section's row data without manual formatting. For each column in the section, build a `tokenMap` object that maps Figma property names to the `display` string from the corresponding row value.
 
 The mapping from table `spec` names to Figma properties:
 
 | Table spec name | Figma property in tokenMap |
 |---|---|
+| `padding` | `paddingTop` AND `paddingBottom` AND `paddingLeft` AND `paddingRight` (set all four to the same value) |
 | `horizontalPadding` | `paddingLeft` AND `paddingRight` (set both to the same value) |
 | `verticalPadding` | `paddingTop` AND `paddingBottom` (set both to the same value) |
 | `paddingTop` | `paddingTop` |
@@ -571,13 +869,13 @@ The mapping from table `spec` names to Figma properties:
 | `paddingEnd` / `paddingRight` | `paddingRight` |
 | `contentSpacing` / `itemSpacing` / `gapBetween` / `iconLabelSpacing` | `itemSpacing` |
 
-For each section row, look up the row's `spec` in this mapping. For each value column index `i`, set `tokenMaps[i][figmaProp] = row.values[i]`. If a spec name maps to two Figma properties (e.g., `horizontalPadding` → `paddingLeft` + `paddingRight`), set both keys.
+For each section row, look up the row's `spec` in this mapping. For each value column index `i`, set `tokenMaps[i][figmaProp] = row.values[i]`. The `row.values[i]` already contains the correctly formatted display string (e.g., `"spacing-md (16)"` or `"16"`) because Step 7 populated rows using the `display` field from the dimensional data.
 
 If the section has no padding or spacing rows, set `TOKEN_MAPS` to `[]`. The recursive tree walker will still annotate padding, spacing, and min/max constraints it discovers, using raw numeric values as labels.
 
-#### Step 12b: Render the table
+#### Step 11b: Render the table
 
-Run **one `figma_execute` call** for this section's table. Replace all `__PLACEHOLDER__` values with actual data.
+Run **one `figma_execute` call** for this section's table. Replace all `__PLACEHOLDER__` values with actual data from Step 7.
 
 ```javascript
 const FRAME_ID = '__FRAME_ID__';
@@ -726,22 +1024,22 @@ rowTemplate.remove();
 return { success: true, section: SECTION_NAME };
 ```
 
-#### Step 12c: Populate this section's preview
+#### Step 11c: Populate this section's preview
 
-**Immediately after** the table is rendered for this section, populate its `#Preview` frame with annotated component instances. Use the preview parameters determined in Step 12a.
+**Immediately after** the table is rendered for this section, populate its `#Preview` frame with annotated component instances. Use the preview parameters determined in Step 11a.
 
-Replace the following placeholders with the values from Step 12a:
+Replace the following placeholders with the values from Step 11a:
 
-- `__FRAME_ID__` — the root frame ID from Step 10
-- `__SECTION_NAME__` — the section name (same as used in 12b)
+- `__FRAME_ID__` — the root frame ID from Step 9
+- `__SECTION_NAME__` — the section name (same as used in 11b)
 - `__COMP_SET_NODE_ID__` — the component set (or standalone component) node ID
-- `__SUB_COMP_SET_NODE_ID__` — the sub-component's own component set ID from Step 4d (empty string `''` for non-sub-component sections)
-- `__DEFAULT_PROPS_JSON__` — object mapping all variant axis names to their default values (from `variantAxes` in Step 4b extraction). When `SUB_COMP_SET_ID` is non-empty, use the sub-component's own variant axes defaults instead.
-- `__VARIANT_AXIS__` — from the decision table in Step 12a
-- `__COLUMN_VALUES_JSON__` — from the decision table in Step 12a
-- `__PROPERTY_OVERRIDES_JSON__` — from the decision table in Step 12a
-- `__SUB_COMP_OVERRIDES_JSON__` — object mapping sub-component boolean property keys to `true`, from Step 4d (empty object `{}` for non-sub-component sections)
-- `__TOKEN_MAPS_JSON__` — from the token map construction in Step 12a
+- `__SUB_COMP_SET_NODE_ID__` — the sub-component's own component set ID from `subComponents[].subCompSetId` in Step 4b (empty string `''` for non-sub-component sections)
+- `__DEFAULT_PROPS_JSON__` — object mapping all variant axis names to their default values (from `variantAxes` in Step 4b extraction). When `SUB_COMP_SET_ID` is non-empty, use the sub-component's own variant axes defaults from `subComponents[].subCompVariantAxes` instead.
+- `__VARIANT_AXIS__` — from the decision table in Step 11a
+- `__COLUMN_VALUES_JSON__` — from the decision table in Step 11a
+- `__PROPERTY_OVERRIDES_JSON__` — from the decision table in Step 11a
+- `__SUB_COMP_OVERRIDES_JSON__` — object mapping sub-component boolean property keys to `true`, from `subComponents[].booleanOverrides` in Step 4b (empty object `{}` for non-sub-component sections)
+- `__TOKEN_MAPS_JSON__` — from the token map construction in Step 11a
 
 ```javascript
 const FRAME_ID = '__FRAME_ID__';
@@ -775,10 +1073,9 @@ const isComponentSet = compNode.type === 'COMPONENT_SET';
 
 await figma.loadFontAsync({ family: FONT_FAMILY, style: 'Medium' });
 
-function labelText(tokenMap, prop, fallbackValue) {
-  // Always include the property name in the label for readability: "paddingLeft (10)"
-  const value = (tokenMap && tokenMap[prop] && tokenMap[prop] !== '–') ? tokenMap[prop] : String(fallbackValue);
-  return prop + ' (' + value + ')';
+function labelText(tokenMap, logicalName, figmaProp, fallbackValue) {
+  const value = (tokenMap && tokenMap[figmaProp] && tokenMap[figmaProp] !== '–') ? tokenMap[figmaProp] : String(fallbackValue);
+  return logicalName + ' (' + value + ')';
 }
 
 function annotateNode(node, tokenMap, isRoot) {
@@ -798,25 +1095,25 @@ function annotateNode(node, tokenMap, isRoot) {
       if (pT >= MIN_ANNOTATABLE) {
         figma.currentPage.addMeasurement(
           { node: node, side: 'TOP' }, { node: first, side: 'TOP' },
-          { freeText: labelText(tokenMap, 'paddingTop', pT), offset: { type: 'OUTER', fixed: -20 } }
+          { freeText: labelText(tokenMap, 'paddingTop', 'paddingTop', pT), offset: { type: 'OUTER', fixed: -20 } }
         );
       }
       if (pB >= MIN_ANNOTATABLE) {
         figma.currentPage.addMeasurement(
           { node: last, side: 'BOTTOM' }, { node: node, side: 'BOTTOM' },
-          { freeText: labelText(tokenMap, 'paddingBottom', pB), offset: { type: 'OUTER', fixed: -20 } }
+          { freeText: labelText(tokenMap, 'paddingBottom', 'paddingBottom', pB), offset: { type: 'OUTER', fixed: -20 } }
         );
       }
       if (pL >= MIN_ANNOTATABLE) {
         figma.currentPage.addMeasurement(
           { node: node, side: 'LEFT' }, { node: first, side: 'LEFT' },
-          { freeText: labelText(tokenMap, 'paddingLeft', pL), offset: { type: 'OUTER', fixed: -20 } }
+          { freeText: labelText(tokenMap, 'paddingStart', 'paddingLeft', pL), offset: { type: 'OUTER', fixed: -20 } }
         );
       }
       if (pR >= MIN_ANNOTATABLE) {
         figma.currentPage.addMeasurement(
           { node: last, side: 'RIGHT' }, { node: node, side: 'RIGHT' },
-          { freeText: labelText(tokenMap, 'paddingRight', pR), offset: { type: 'OUTER', fixed: -20 } }
+          { freeText: labelText(tokenMap, 'paddingEnd', 'paddingRight', pR), offset: { type: 'OUTER', fixed: -20 } }
         );
       }
     }
@@ -828,7 +1125,7 @@ function annotateNode(node, tokenMap, isRoot) {
         figma.currentPage.addMeasurement(
           { node: kids[ci], side: isH ? 'RIGHT' : 'BOTTOM' },
           { node: kids[ci + 1], side: isH ? 'LEFT' : 'TOP' },
-          { freeText: labelText(tokenMap, 'itemSpacing', spacing), offset: { type: 'OUTER', fixed: 10 } }
+          { freeText: labelText(tokenMap, 'itemSpacing', 'itemSpacing', spacing), offset: { type: 'OUTER', fixed: 10 } }
         );
       }
     }
@@ -837,25 +1134,25 @@ function annotateNode(node, tokenMap, isRoot) {
   if (node.minWidth > 0) {
     figma.currentPage.addMeasurement(
       { node: node, side: 'LEFT' }, { node: node, side: 'RIGHT' },
-      { freeText: labelText(tokenMap, 'minWidth', 'min ' + node.minWidth), offset: { type: 'OUTER', fixed: 30 } }
+      { freeText: labelText(tokenMap, 'minWidth', 'minWidth', 'min ' + node.minWidth), offset: { type: 'OUTER', fixed: 30 } }
     );
   }
   if (node.maxWidth > 0 && node.maxWidth < 10000) {
     figma.currentPage.addMeasurement(
       { node: node, side: 'LEFT' }, { node: node, side: 'RIGHT' },
-      { freeText: labelText(tokenMap, 'maxWidth', 'max ' + node.maxWidth), offset: { type: 'OUTER', fixed: 30 } }
+      { freeText: labelText(tokenMap, 'maxWidth', 'maxWidth', 'max ' + node.maxWidth), offset: { type: 'OUTER', fixed: 30 } }
     );
   }
   if (node.minHeight > 0) {
     figma.currentPage.addMeasurement(
       { node: node, side: 'TOP' }, { node: node, side: 'BOTTOM' },
-      { freeText: labelText(tokenMap, 'minHeight', 'min ' + node.minHeight), offset: { type: 'OUTER', fixed: 30 } }
+      { freeText: labelText(tokenMap, 'minHeight', 'minHeight', 'min ' + node.minHeight), offset: { type: 'OUTER', fixed: 30 } }
     );
   }
   if (node.maxHeight > 0 && node.maxHeight < 10000) {
     figma.currentPage.addMeasurement(
       { node: node, side: 'TOP' }, { node: node, side: 'BOTTOM' },
-      { freeText: labelText(tokenMap, 'maxHeight', 'max ' + node.maxHeight), offset: { type: 'OUTER', fixed: 30 } }
+      { freeText: labelText(tokenMap, 'maxHeight', 'maxHeight', 'max ' + node.maxHeight), offset: { type: 'OUTER', fixed: 30 } }
     );
   }
 
@@ -957,7 +1254,7 @@ return { success: true, section: SECTION_NAME };
 
 #### After all sections: hide the template
 
-After processing all sections (each with 12a → 12b → 12c), hide the original `#section-template`:
+After processing all sections (each with 11a → 11b → 11c), hide the original `#section-template`:
 
 ```javascript
 const frame = await figma.getNodeByIdAsync('__FRAME_ID__');
@@ -966,7 +1263,7 @@ if (sectionTemplate) sectionTemplate.visible = false;
 return { success: true };
 ```
 
-### Step 13: Visual Validation
+### Step 12: Visual Validation
 
 1. `figma_take_screenshot` with the `frameId` — Capture the completed spec
 2. Verify:
@@ -991,25 +1288,29 @@ return { success: true };
 ## Notes
 
 - The structure template key is stored in `uspecs.config.json` under `templateKeys.structureSpec` and is configured via `@firstrun`.
-- The target node can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). The extraction script detects the type and returns `isComponentSet` accordingly. When the node is a standalone component, it is treated as a single-entry variants array and there are no variant axes. Preview instance creation in Step 12c uses `compNode.createInstance()` directly for standalone components.
+- The target node can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). The extraction script detects the type and returns `isComponentSet` accordingly. When the node is a standalone component, it is treated as a single-entry variants array and there are no variant axes. Preview instance creation in Step 11c uses `compNode.createInstance()` directly for standalone components.
 - **Behavior/Configuration variant previews**: When a variant axis controls visual configuration (e.g., Static vs Interactive), the preview shows only the **default configuration** (e.g., Static) — one row of instances at each size is sufficient to illustrate dimensional properties. There is no need to duplicate instances for each configuration. If dimensional values are identical across configurations, document them once with a note. If a property like `borderWidth` differs, add it as a row in the table.
-- **Hybrid exploration model**: The extraction script (Step 4b) provides a fast structured baseline — variant axes, dimensions, token bindings, and property definitions. Step 4d then adds free-form agent exploration to discover hidden sub-components, enable boolean toggles, and extract deeper internal structure. This combines deterministic extraction with the exploratory freedom needed for thorough sub-component analysis.
-- **Two levels of boolean toggles**: The parent component's `propertyDefs` contains booleans that gate top-level sub-components (e.g., "Show hint text" on a Text Field). But each sub-component INSTANCE also has its own `componentProperties` with booleans that gate *internal* children (e.g., "Character count" and "Show icon" on a Label instance). The extraction script only captures `propertyDefs` from the parent component set — it does NOT capture sub-component instance properties. Step 4d MUST read `instance.componentProperties` on every INSTANCE child to discover these internal toggles. Missing this results in incomplete sections that omit optional internal elements like counters, status icons, and secondary text areas.
-- The extraction script (Step 4b) selects representative variants (one per axis value at defaults for other axes) and walks their full child trees, extracting dimensions, padding, spacing, corner radius, layout properties, variable bindings (token names), text styles, and component property definitions. For a component with N axes each having V values, this extracts at most V1 + V2 + ... + Vn - (n-1) variants instead of V1 × V2 × ... × Vn. This keeps output size proportional to the axis cardinality sum rather than the axis cardinality product, preventing large-output failures while preserving full structural depth for sub-component analysis.
-- The `propertyDefs` from extraction provide the exact Figma property keys (including `#nodeId` suffixes for booleans) that the agent can use when creating preview instances in Step 12c and during deep exploration in Step 4d.
+- **Two-tier extraction model**: The extraction script (Step 4b) provides a comprehensive structured baseline — variant axes, dimensions, token bindings, property definitions, sub-component discovery (with `subCompSetId`, `subCompVariantAxes`, and `booleanOverrides`), an enriched fully-enabled child tree, a layout tree, and collapsed/expanded dimensional representations. Step 4d adds a deterministic cross-variant dimensional comparison across all sizes for every sub-component. Together, these two deterministic scripts provide complete dimensional data, eliminating the need for free-form `figma_execute` exploration. The AI's reasoning budget (Step 6) is spent on interpretation, not data gathering.
+- **Two levels of boolean toggles**: The parent component's `propertyDefs` contains booleans that gate top-level sub-components (e.g., "Show hint text" on a Text Field). Each sub-component INSTANCE also has its own `componentProperties` with booleans that gate *internal* children (e.g., "Character count" and "Show icon" on a Label instance). The enhanced extraction script (Step 4b) captures BOTH levels: `booleanDefs` for parent-level booleans, and `subComponents[].booleanOverrides` for each sub-component's own boolean properties. The enriched tree is always created (even when no parent booleans exist), ensuring sub-component discovery works for all components.
+- The extraction script (Step 4b) selects representative variants (one per axis value at defaults for other axes) and walks their full child trees, extracting collapsed/expanded dimensions, logical-direction padding, token bindings with display strings, typography composites, and layout trees. For a component with N axes each having V values, this extracts at most V1 + V2 + ... + Vn - (n-1) variants instead of V1 × V2 × ... × Vn.
+- **Collapsed/expanded dimensional model**: Padding is returned as a single `{ value, token, display }` when all four sides have equal values AND equal token names, `{ vertical, horizontal }` when top==bottom and left==right (values and tokens), or `{ top, bottom, start, end }` with logical directions when sides differ in value or token. This means two sides with the same numeric value but different token names (e.g., `spacing-vertical-md` vs `spacing-horizontal-md`, both resolving to 16) will be returned per-side, preserving the distinct token names. Same pattern for cornerRadius and strokeWeight. The data structure itself communicates whether values are uniform — the AI doesn't need to guess. Table rows become `padding` / `horizontalPadding` + `verticalPadding` / individual `paddingTop`, `paddingStart`, etc. based on the shape of the extraction output.
+- **Logical direction normalization**: The extraction uses logical directions (`start`/`end`) instead of physical (`left`/`right`) for padding and stroke weight. Corner radii use `topStart`, `topEnd`, `bottomStart`, `bottomEnd`. This ensures specs are RTL-aware by default.
+- **Typography as composite**: The extraction returns `typography: { styleName }` when a named text style is used, or `{ fontSize, fontWeight, lineHeight, ... }` for inline values — never both. This makes table row decisions deterministic: if `styleName` exists, emit one `textStyle` row; if inline, emit individual typography rows.
+- **Pre-formatted display strings**: Every `{ value, token, display }` tuple includes a `display` field: `"token-name (value)"` when token-bound, `"value"` when hardcoded. Step 7 uses `display` directly as table cell values. Step 11a uses `display` values from rows to build token maps. No manual formatting of token+value strings is needed.
+- **Layout tree**: Each variant includes a `layoutTree` — a recursive tree showing auto-layout nesting. Nodes that have `hasPadding` or `hasSpacing` are structurally significant containers; pass-through wrappers are collapsed. Step 6A uses this to identify which containers deserve sections in the section plan.
+- **Section planning**: Step 6A builds a `sectionPlan` by applying deterministic rules to the extraction data (variant axes with numeric differences → columns, sub-components → sections, 2+ sub-components with size variants → composition section, state changes → state-conditional sections), then validates and adjusts the result using AI judgment about the component's actual structure. The rules and validation happen in a single pass — there is no separate deterministic script.
+- **AI interpretation layer**: Step 6 redirects AI reasoning toward five high-value tasks: (A) validating the section plan against the full data, (B) writing design-intent notes that explain "why this value" not just "what is this property", (C) recognizing cross-section patterns, (D) detecting anomalies (scaling inconsistencies, token misconfiguration, asymmetric padding), and (E) judging completeness. This produces better output quality for engineers because the AI's reasoning budget is spent on interpretation, not mechanical data gathering.
+- The `propertyDefs` from extraction provide the exact Figma property keys (including `#nodeId` suffixes for booleans) that the agent can use when creating preview instances in Step 11c.
 - When the component is in a different file than the destination, run the extraction script in the component's file first, then navigate to the destination before importing the template.
-- Dynamic columns: The `#variant-value` template in the header row and `#property-value-cell` in each data row are cloned once per value column, then the original template is removed. Clones are inserted before the Notes column to maintain correct column order. All value columns and the Notes column use `layoutSizingHorizontal = 'FILL'` so Figma's auto-layout distributes width equally across them. This guarantees header and data row columns align regardless of structural differences (e.g., the hierarchy indicator in data rows but not in the header).
-- **Per-section rendering**: Step 12 processes one section at a time: determine preview parameters (12a), render table (12b), populate preview (12c). This keeps section-specific context fresh — the agent determines which variant axis, column values, property overrides, and token maps to use immediately before rendering each preview, preventing the context loss that occurs when all tables are rendered first and all previews second.
-- Preview instances: Step 12c provides an explicit `figma_execute` script per section that creates labeled component instances inside each section's `#Preview` frame. It uses variant matching with fallback logic (exact match first, then best partial match) identical to create-property. The preview frame's layout properties are defined by the template and must NOT be overridden — the script only sets `clipsContent = false`. Each instance is wrapped in a vertical auto-layout frame containing the component instance and a label below it. All wrappers are appended to the preview. In the second pass, each wrapper is switched from `layoutMode = 'VERTICAL'` to `layoutMode = 'NONE'` — this freezes the instance and label at their laid-out positions — then annotations are applied.
-- **Recursive tree walker**: The `annotateNode()` function walks the full visible subtree of each instance, creating native Figma measurements on every structurally significant node. This replaces the previous single-node annotation approach — no `ANNOTATE_PADDING`, `ANNOTATE_SPACING`, or `ANNOTATE_TARGET` params are needed.
-- **INSTANCE recursion boundary**: The entry-point instance (the component variant being previewed) is always fully traversed — `annotateNode` is called with `isRoot = true`, which bypasses the INSTANCE type check for that node only. All nested INSTANCE children encountered during recursion are measured externally (e.g., their minHeight constraint) but NOT recursed into — their internals are documented in their own specs.
-- **Sub-component preview sourcing**: When a section documents a sub-component (e.g., Label, Input, Hint Text), the preview script uses `SUB_COMP_SET_ID` to create instances from the **sub-component's own component set** rather than the parent's `COMP_SET_ID`. This shows the sub-component in isolation at each size, not the full parent component. The `SUB_COMP_OVERRIDES` parameter enables boolean properties on each sub-component instance so optional internal children (character counts, icons, etc.) are visible. When `SUB_COMP_SET_ID` is empty, the script falls back to the parent's component set (standard behavior for non-sub-component sections). The sub-component's component set ID and boolean overrides are recorded during Step 4d exploration via `getMainComponentAsync()` → `mainComponent.parent.id` and `instance.componentProperties`.
-- **Native Figma measurements**: All dimension annotations use `figma.currentPage.addMeasurement()` — no drawn rectangles, overlays, or badge nodes. Each measurement uses `freeText` to display the label and `offset` to control line placement. Padding measurements use `{ type: 'OUTER', fixed: -20 }`, spacing measurements use `{ type: 'OUTER', fixed: 10 }`, and min/max constraint measurements use `{ type: 'OUTER', fixed: 30 }`. Measurements stay anchored to their endpoint nodes, so they remain correct if the component is resized.
-- **Padding measurements**: Created between auto-layout container edges and first/last visible children. For each side (top, bottom, left, right) where padding >= 4px, one `addMeasurement()` call is made.
-- **Spacing measurements**: Created between consecutive visible siblings within auto-layout containers. For horizontal layouts: childA RIGHT → childB LEFT. For vertical layouts: childA BOTTOM → childB TOP.
-- **Min/max constraint measurements**: Created on any node with `minWidth`, `maxWidth`, `minHeight`, or `maxHeight` set. Width constraints use LEFT→RIGHT endpoints; height constraints use TOP→BOTTOM. Labels show "min X" or "max X" as fallback, or the token-mapped display string if available.
-- **Minimum annotation threshold**: Measurements are skipped when the padding or spacing value is less than 4px. This prevents cluttered annotations on components with very tight spacing.
-- **Token map (optional enrichment)**: The `TOKEN_MAPS` parameter bridges the table data and the annotation labels. For each column, the agent builds a `{ figmaProp: displayString }` object from the section's rows so that annotation labels include the token-enriched value string. Labels always use the format `"propertyName (value)"` — e.g., `"paddingLeft (spacing-md (16))"` when a token map entry exists, or `"paddingLeft (16)"` when falling back to raw values. When `TOKEN_MAPS` is `[]` or a property has no entry, the walker uses `"propertyName (numericValue)"`. The mapping from table spec names (like `horizontalPadding`) to Figma properties (like `paddingLeft` + `paddingRight`) is documented in the token map construction guide in Step 12a.
-- Hierarchy indicators: The `#hierarchy-indicator` frame contains two child vectors — `within-group` (├─) for mid-group rows and `#hierarchy-indicator-last` (└─) for the last row in a group. For non-sub-properties, the entire frame is hidden.
-- Each section is rendered in a separate `figma_execute` call to avoid timeouts on complex specs with many rows and columns.
-- The instruction file (`structure/agent-structure-instruction.md`) contains the decision framework, examples, and field rules for organizing sections and columns. The agent reasons internally using this guidance and renders directly into Figma — no JSON is output.
+- Dynamic columns: The `#variant-value` template in the header row and `#property-value-cell` in each data row are cloned once per value column, then the original template is removed. Clones are inserted before the Notes column to maintain correct column order. All value columns and the Notes column use `layoutSizingHorizontal = 'FILL'` so Figma's auto-layout distributes width equally across them.
+- **Per-section rendering**: Step 11 processes one section at a time: determine preview parameters (11a), render table (11b), populate preview (11c). This keeps section-specific context fresh — the agent determines which variant axis, column values, property overrides, and token maps to use immediately before rendering each preview.
+- Preview instances: Step 11c provides an explicit `figma_execute` script per section that creates labeled component instances inside each section's `#Preview` frame. It uses variant matching with fallback logic (exact match first, then best partial match) identical to create-property. The preview frame's layout properties are defined by the template and must NOT be overridden — the script only sets `clipsContent = false`.
+- **Recursive tree walker**: The `annotateNode()` function walks the full visible subtree of each instance, creating native Figma measurements on every structurally significant node.
+- **INSTANCE recursion boundary**: The entry-point instance is always fully traversed — `annotateNode` is called with `isRoot = true`, which bypasses the INSTANCE type check for that node only. All nested INSTANCE children encountered during recursion are measured externally but NOT recursed into.
+- **Sub-component preview sourcing**: When a section documents a sub-component, the preview script uses `SUB_COMP_SET_ID` (from `subComponents[].subCompSetId` in Step 4b) to create instances from the sub-component's own component set. The `SUB_COMP_OVERRIDES` (from `subComponents[].booleanOverrides` with all values set to `true`) enables boolean properties on each instance so optional internal children are visible.
+- **Native Figma measurements**: All dimension annotations use `figma.currentPage.addMeasurement()`. Padding: `{ type: 'OUTER', fixed: -20 }`, spacing: `{ type: 'OUTER', fixed: 10 }`, min/max constraints: `{ type: 'OUTER', fixed: 30 }`.
+- **Token map from extraction data**: Because the extraction returns pre-formatted `display` strings, token maps are built directly from the section's row data. The `display` string goes directly into both table cells and annotation labels, eliminating manual TOKEN_MAPS construction. The mapping from table spec names to Figma properties is documented in Step 11a.
+- **Minimum annotation threshold**: Measurements are skipped when the padding or spacing value is less than 4px.
+- Hierarchy indicators: The `#hierarchy-indicator` frame contains two child vectors — `within-group` (├─) for mid-group rows and `#hierarchy-indicator-last` (└─) for the last row. For non-sub-properties, the entire frame is hidden.
+- Each section is rendered in a separate `figma_execute` call to avoid timeouts.
+- The instruction file (`structure/agent-structure-instruction.md`) contains the decision framework, examples, and field rules for organizing sections and columns.

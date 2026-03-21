@@ -3,6 +3,28 @@ title: "Changelog"
 description: "Product updates and release history"
 ---
 
+<Update label="V1.3 — March 2026" description="Improved create-voice skill output and token usage">
+  ## uSpec V1.3
+
+  The `create-voice` screen reader skill now produces more detailed, more accurate specs while using fewer tokens — smarter extraction, better artwork fidelity, and automatic state deduplication.
+
+  ### More detailed screen reader output
+
+  - Focus stop discovery uses deep traversal (`findOne`) instead of shallow children lookup — correctly resolves nested elements like a clear button inside an Input child instance
+  - Focus Order artwork now maximizes element visibility: boolean properties are force-enabled and the richest state variant is selected automatically, so all documented focus stops appear in the preview even when the default variant hides some of them
+  - `booleanDefs` extracted alongside `variantAxes` in the component scan, giving the rendering step full knowledge of toggleable sub-elements
+
+  ### Fewer tokens via state grouping
+
+  - States with identical accessibility semantics (same focus stops, roles, labels, and announcements) are collapsed into a single entry with a combined title — e.g., "Text field Enabled / Pressed / Active" instead of three separate sections
+  - Cuts redundant output for components like Text field that have many visual-only state differences but identical screen reader behavior
+  - Guidance added to both the skill workflow and the agent instruction file, with a new validation checklist row and common-mistake entry
+
+  ### Housekeeping
+
+  - Added `FONT_FAMILY` placeholder to the rendering template for consistent font resolution across specs
+</Update>
+
 <Update label="V1.2 — March 2026" description="Drastically improved create-structure skill">
   ## uSpec V1.2
 

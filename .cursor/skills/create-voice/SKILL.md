@@ -124,16 +124,36 @@ for (const child of childContainer.children) {
   elements.push(await extractElement(child, idx++, absX, absY));
 }
 
+const propDefs = node.componentPropertyDefinitions || {};
+const variantAxes = [];
+for (const [rawKey, def] of Object.entries(propDefs)) {
+  if (def.type === 'VARIANT') {
+    const cleanKey = rawKey.split('#')[0];
+    variantAxes.push({
+      name: cleanKey,
+      options: def.variantOptions || [],
+      defaultValue: def.defaultValue
+    });
+  }
+}
+
+const booleanDefs = {};
+for (const [rawKey, def] of Object.entries(propDefs)) {
+  if (def.type === 'BOOLEAN') booleanDefs[rawKey] = def.defaultValue;
+}
+
 return {
   componentName: node.name,
   compSetNodeId: TARGET_NODE_ID,
   isComponentSet,
   rootSize: { w: Math.round(variant.width), h: Math.round(variant.height) },
-  elements
+  elements,
+  variantAxes,
+  booleanDefs
 };
 ```
 
-Save the returned JSON — you will use `componentName`, `compSetNodeId`, `rootSize`, and `elements` in subsequent steps. The `elements` array provides structural data for merge analysis and bounding box geometry for positioning focus order markers.
+Save the returned JSON — you will use `componentName`, `compSetNodeId`, `rootSize`, `elements`, `variantAxes`, and `booleanDefs` in subsequent steps. The `elements` array provides structural data for merge analysis and bounding box geometry for positioning focus order markers. The `variantAxes` array lists each variant property axis with its options and default value — used in Step 5F to map states to variant properties. The `booleanDefs` object maps each boolean property key to its default value — used in Step 10–11 to force-enable boolean-gated elements on the Focus Order artwork.
 
 ### Step 5: List Visual Parts and Run Merge Analysis
 
@@ -159,6 +179,25 @@ Consider platform-specific merge mechanisms:
 
 **E. States:** List all states to document. Note if focus order changes between states (e.g., error state adds a live region).
 
+**E-bis. State grouping — collapse states with identical accessibility semantics:**
+
+Not every Figma variant state warrants its own spec entry. Filter variant axes using the `A11Y_AXES` pattern `/state|mode|interaction/i` to identify axes that may affect accessibility semantics (skip purely visual axes like Size, Shape, Theme). Then compare all state variants on these three dimensions:
+
+1. **Focus stop count** — same number of focus stops?
+2. **Semantic properties** — same roles, labels, values, traits, ARIA attributes?
+3. **Announcement pattern** — same screen reader announcement text (ignoring state-specific value differences)?
+
+If two or more states are identical on all three dimensions, group them into a single entry with a combined title (e.g., "Text field Enabled / Pressed / Active"). Document one representative per group.
+
+**Always keep separate entries** for states with unique accessibility behavior:
+- Error (adds `aria-invalid`, error message live region)
+- Disabled (changes traits/role to dimmed/disabled)
+- Read-only (changes editability semantics)
+- Loading (adds live region or progress indicator)
+- Any state that changes the focus stop count
+
+**F. State-to-variant mapping:** Using the `variantAxes` from extraction, map each documented state to a set of variant property key-value pairs. Match state names to variant axis options (case-insensitive). When a state name matches an option on a variant axis, set that axis to the matching value and leave other axes at their defaults. When no match is found (e.g., the state is behavioral like "focused" rather than a Figma variant), use the default variant properties. Save this mapping as `stateVariantProps` — a dict from state name to `{ [axisName]: value }`.
+
 ### Step 6: Generate Structured Data
 
 Follow the schema in the instruction file. Build the data as a structured object with:
@@ -168,6 +207,7 @@ Follow the schema in the instruction file. Build the data as a structured object
 - `states`: array, each with:
   - `state`: string (e.g., "enabled", "disabled")
   - `description`: string (optional)
+  - `variantProps`: `Record<string, string>` — variant axis values for this state's preview (from `stateVariantProps`)
   - `sections`: array (3 platform sections), each with:
     - `title`: string (exact: `"VoiceOver (iOS)"`, `"TalkBack (Android)"`, `"ARIA (Web)"`)
     - `tables`: array (one per focus stop / component part), each with:
@@ -255,6 +295,7 @@ First, build the full list of entries to render:
 For each entry, run via `figma_execute`. Replace all `__PLACEHOLDER__` values. Set `RENDER_ARTWORK` to `true` when extraction data is available (Figma link input), or `false` for screenshot-only input:
 
 ```javascript
+const FONT_FAMILY = '__FONT_FAMILY__';
 const FRAME_ID = '__FRAME_ID__';
 const ENTRY_TITLE = '__ENTRY_TITLE__';
 const ENTRY_DESCRIPTION = '__ENTRY_DESCRIPTION__';
@@ -264,6 +305,9 @@ const RENDER_ARTWORK = __RENDER_ARTWORK__;
 const COMP_SET_ID = '__COMP_SET_NODE_ID__';
 const ROOT_SIZE = __ROOT_SIZE_JSON__;
 const FOCUS_STOPS = __FOCUS_STOPS_JSON__;
+const VARIANT_PROPS = __VARIANT_PROPS_JSON__;
+const BOOLEAN_DEFS = __BOOLEAN_DEFS_JSON__;
+const IS_FOCUS_ORDER_ENTRY = __IS_FOCUS_ORDER_ENTRY__;
 
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const stateTemplate = frame.findOne(n => n.name === '#state-template');
@@ -393,6 +437,14 @@ if (RENDER_ARTWORK && FOCUS_STOPS.length >= 1) {
       ? (compNode.defaultVariant || compNode.children[0])
       : compNode;
     const compInstance = defaultVariant.createInstance();
+    if (Object.keys(VARIANT_PROPS).length > 0) {
+      try { compInstance.setProperties(VARIANT_PROPS); } catch (e) {}
+    }
+    if (IS_FOCUS_ORDER_ENTRY && Object.keys(BOOLEAN_DEFS).length > 0) {
+      const enableAll = {};
+      for (const key of Object.keys(BOOLEAN_DEFS)) enableAll[key] = true;
+      try { compInstance.setProperties(enableAll); } catch (e) {}
+    }
     previewPlaceholder.appendChild(compInstance);
     const compX = Math.round((PW - ROOT_SIZE.w) / 2);
     const compY = Math.round((PH - ROOT_SIZE.h) / 2);
@@ -401,12 +453,8 @@ if (RENDER_ARTWORK && FOCUS_STOPS.length >= 1) {
 
     const instAbsX = compInstance.absoluteTransform[0][2];
     const instAbsY = compInstance.absoluteTransform[1][2];
-    let childContainer = compInstance;
-    if (compInstance.children.length === 1 && compInstance.children[0].type === 'FRAME' && compInstance.children[0].layoutMode !== 'NONE') {
-      childContainer = compInstance.children[0];
-    }
     for (const stop of FOCUS_STOPS) {
-      const match = childContainer.children.find(c => c.name === stop.name);
+      const match = compInstance.findOne(n => n.name === stop.name);
       if (match) {
         const absX = match.absoluteTransform[0][2];
         const absY = match.absoluteTransform[1][2];
@@ -416,6 +464,51 @@ if (RENDER_ARTWORK && FOCUS_STOPS.length >= 1) {
           w: Math.round(match.width),
           h: Math.round(match.height)
         };
+      }
+    }
+
+    if (IS_FOCUS_ORDER_ENTRY) {
+      const missingStops = FOCUS_STOPS.filter(s => !s.bbox || !s.bbox.w);
+      if (missingStops.length > 0 && compNode.type === 'COMPONENT_SET') {
+        let bestVariant = null;
+        let bestResolved = 0;
+        for (const v of compNode.children) {
+          const testInst = v.createInstance();
+          let resolved = 0;
+          for (const s of FOCUS_STOPS) {
+            if (testInst.findOne(n => n.name === s.name)) resolved++;
+          }
+          testInst.remove();
+          if (resolved > bestResolved) { bestResolved = resolved; bestVariant = v; }
+        }
+        const currentResolved = FOCUS_STOPS.length - missingStops.length;
+        if (bestVariant && bestResolved > currentResolved) {
+          compInstance.remove();
+          const newInstance = bestVariant.createInstance();
+          if (Object.keys(BOOLEAN_DEFS).length > 0) {
+            const enableAll = {};
+            for (const key of Object.keys(BOOLEAN_DEFS)) enableAll[key] = true;
+            try { newInstance.setProperties(enableAll); } catch (e) {}
+          }
+          previewPlaceholder.appendChild(newInstance);
+          newInstance.x = compX;
+          newInstance.y = compY;
+          const newAbsX = newInstance.absoluteTransform[0][2];
+          const newAbsY = newInstance.absoluteTransform[1][2];
+          for (const stop of FOCUS_STOPS) {
+            const match = newInstance.findOne(n => n.name === stop.name);
+            if (match) {
+              const absX = match.absoluteTransform[0][2];
+              const absY = match.absoluteTransform[1][2];
+              stop.bbox = {
+                x: Math.round(absX - newAbsX),
+                y: Math.round(absY - newAbsY),
+                w: Math.round(match.width),
+                h: Math.round(match.height)
+              };
+            }
+          }
+        }
       }
     }
 
@@ -512,18 +605,24 @@ For the focus order (if present):
 - `ENTRY_DESCRIPTION` = focus order description (or empty)
 - `SECTIONS` = `[{ title: focusOrder.title, tables: focusOrder.tables }]`
 - `FOCUS_STOPS` = all focus stops from the component's focus order tables
+- `VARIANT_PROPS` = for the Focus Order entry, maximize focus stop visibility in two steps: (1) Enable all boolean properties from `booleanDefs` on the instance via `setProperties` so boolean-gated elements appear. (2) If any documented focus stops are still not found (state-gated, not boolean-gated), iterate all state variants and select the one where `findOne` resolves the most focus stop names. Use that variant's properties as `VARIANT_PROPS`. If no single variant shows all stops, use the state with the most stops and note which stops are missing in the spec.
 
 For each state:
 - `ENTRY_TITLE` = `"__COMPONENT_NAME__ __STATE__"` (e.g., "Button enabled")
 - `ENTRY_DESCRIPTION` = state description (or empty)
 - `SECTIONS` = the state's sections array (3 platform sections)
 - `FOCUS_STOPS` = same focus stops as the focus order entry, unless the state changes the focus order (e.g., error state adds/removes elements — adjust accordingly)
+- `VARIANT_PROPS` = `stateVariantProps[state]` from Step 5F (the variant axis values that switch the preview instance to this state's variant)
 
 **Artwork parameters:**
+- `FONT_FAMILY` = the `fontFamily` value from `uspecs.config.json` (default: `Inter`)
 - `RENDER_ARTWORK` = `true` when extraction data is available (Figma link input), `false` for screenshot-only input
 - `COMP_SET_ID` = `compSetNodeId` from extraction (set to `''` when `RENDER_ARTWORK` is `false`)
 - `ROOT_SIZE` = `rootSize` from extraction (set to `{ w: 0, h: 0 }` when `RENDER_ARTWORK` is `false`)
 - `FOCUS_STOPS` = array of `{ index, name, bbox: {x, y, w, h} }` from extraction elements (set to `[]` when `RENDER_ARTWORK` is `false`)
+- `VARIANT_PROPS` = variant axis values for this entry (set to `{}` when `RENDER_ARTWORK` is `false` or for the focus order entry)
+- `BOOLEAN_DEFS` = `booleanDefs` from extraction (set to `{}` when `RENDER_ARTWORK` is `false`)
+- `IS_FOCUS_ORDER_ENTRY` = `true` for the Focus Order entry, `false` for per-state entries
 
 ### Step 12: Visual Validation
 
@@ -555,3 +654,6 @@ For each state:
 - After all state entries are rendered, both `#marker-example` and `#state-template` are hidden in a single cleanup call.
 - The table header row uses `#focus-order` (280px) and `#announcement` (1120px) columns inside `#header-row`. The `#focus-order` column shows the reading order number (`focusOrderIndex`), and `#announcement` shows the part name + full announcement combined (e.g., "Button \"Submit, button\"").
 - The instruction file (`screen-reader/agent-screenreader-instruction.md`) and platform reference files contain the schema, merge analysis rules, and platform-specific patterns. The AI reasoning for merge analysis and announcement generation is unchanged — only the delivery mechanism has changed.
+- Variant properties are applied via `setProperties()` after instance creation; the `try/catch` handles behavioral states (e.g., "focused") that don't map to a Figma variant.
+- Bounding boxes are recalculated from the live instance after variant switching, so markers track actual element positions in that variant.
+- For the Focus Order entry, focus stop visibility is maximized in two steps: (1) all boolean properties from `booleanDefs` are force-enabled via `setProperties` so boolean-gated elements (e.g., trailing clear button) appear; (2) if any documented focus stops are still missing after boolean-enable, all state variants are iterated and the one resolving the most focus stop names via `findOne` is selected. Per-state entries do NOT enable booleans or run the richest-variant fallback — they use `VARIANT_PROPS` to show the exact state variant, so only elements visible in that state appear.

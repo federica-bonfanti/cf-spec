@@ -17,7 +17,7 @@
 
 ## Overview
 
-uSpec generates documentation specifications for UI components. Most skills extract component data via MCP and render annotations directly in Figma using `figma_execute`. The motion skill is an exception — it reads pre-computed data from an After Effects export script rather than inspecting Figma components.
+uSpec generates documentation specifications for UI components. Most skills extract component data via a Figma MCP (Console or native) and render annotations directly in Figma using Plugin API JavaScript. The motion skill is an exception — it reads pre-computed data from an After Effects export script rather than inspecting Figma components.
 
 1. **Anatomy** - Numbered markers on a component instance with an attribute table
 2. **Property** - Variant axes and boolean toggles with instance previews
@@ -25,14 +25,11 @@ uSpec generates documentation specifications for UI components. Most skills extr
 4. **Color Annotation** - Design token specifications for component colors
 5. **API Overview** - Component property documentation with configuration examples
 6. **Structure Specification** - Dimensional properties documentation (spacing, padding, density variants)
-7. **Changelog (create)** - Create a new changelog template with initial entries
-8. **Changelog (update)** - Append new entries to an existing changelog
-9. **Changelog (convert)** - Extract and convert an existing Figma changelog to structured JSON
-10. **Motion Specification** - Animation timeline documentation from After Effects export data (pre-computed segments, no raw keyframes)
+7. **Motion Specification** - Animation timeline documentation from After Effects export data (pre-computed segments, no raw keyframes)
 
 ## Skills
 
-Agent workflows are defined as skills. Each skill has a `SKILL.md` with frontmatter (`name`, `description`), inputs, a step-by-step workflow, and `figma_execute` code blocks. The skill content is identical across hosts — only the directory location and invocation syntax differ.
+Agent workflows are defined as skills. Each skill has a `SKILL.md` with frontmatter (`name`, `description`), inputs, an MCP Adapter mapping table, a step-by-step workflow, and Plugin API code blocks. The skill content is identical across hosts and MCP providers — only the directory location, invocation syntax, and tool call names differ (handled by the MCP Adapter section in each skill).
 
 ### Skill locations by host
 
@@ -52,9 +49,6 @@ Agent workflows are defined as skills. Each skill has a `SKILL.md` with frontmat
 | `create-color` | color, color annotation, tokens | Color annotation generation |
 | `create-api` | api, props, properties, component api | API overview generation |
 | `create-structure` | structure, structure spec, dimensions, spacing, density, sizing | Structure spec generation |
-| `create-changelog` | create changelog, new changelog, start changelog | Create new changelog with first entry |
-| `update-changelog` | update changelog, add to changelog, changelog entry, log this change | Add entries to existing changelog |
-| `convert-changelog` | convert changelog, import changelog, migrate changelog | Convert existing Figma changelog to JSON format |
 | `create-motion` | motion, motion spec, animation spec, timeline | Motion specification from AE export (JSON paste, file ref, or Figma destination link) |
 | `firstrun` | firstrun, first run, setup, setup library, configure templates | First-time environment setup and template library configuration |
 
@@ -64,18 +58,38 @@ Agent workflows are defined as skills. Each skill has a `SKILL.md` with frontmat
 
 **Editing skills:** Always edit the `.cursor/skills/<name>/SKILL.md` file, then run `./utils/sync-skills.sh` to propagate changes to `.claude/skills/` and `.agents/skills/`. Never edit the synced copies directly — they will be overwritten on the next sync. Use `--target claude` or `--target codex` to sync to one platform only.
 
-## Figma Console MCP Tools
+## Figma MCP Tools
 
-Skills use the Figma Console MCP to gather component context when a Figma link is provided. The agent combines user-provided input (screenshots, descriptions) with MCP-retrieved data for maximum context.
+uSpec supports two Figma MCP providers, configured via `mcpProvider` in `uspecs.config.json`:
 
-For the latest tools and usage, see: https://docs.figma-console-mcp.southleft.com/tools
+| Provider | Value | Description |
+|----------|-------|-------------|
+| Figma Console MCP (Southleft) | `figma-console` | Requires Desktop Bridge plugin. Provides dedicated tools for navigation, screenshots, variables, styles, and component search. |
+| Figma MCP (Native) | `figma-mcp` | Official Figma MCP with write access. Uses `use_figma` for Plugin API execution and dedicated tools for screenshots, metadata, and design system search. |
 
-### Connection Verification
+Each skill has an **MCP Adapter** section at the top that maps operations to the correct tool calls for either provider. The Plugin API JavaScript in all `figma_execute` / `use_figma` code blocks is identical — no code changes are needed between providers. The only per-call differences on the native path are supplying `fileKey` and `description` parameters.
 
-Before using MCP tools, verify the connection:
-- `figma_get_status` — Confirms Figma Desktop is connected via the Desktop Bridge plugin
+### Complete Tool Mapping
 
-### Context Gathering Tools
+| Console MCP | Native MCP | Notes |
+|-------------|------------|-------|
+| `figma_execute(code)` | `use_figma(fileKey, code, description)` | JS code is identical. Both support top-level await + return. Native requires `fileKey` + `description`. |
+| `figma_get_status` | *(none)* | Connection is implicit on native. Verify by making any call. |
+| `figma_navigate(url)` | *(none)* | Not needed — `use_figma` takes `fileKey` directly. Agent extracts `fileKey` from URL. |
+| `figma_take_screenshot` | `get_screenshot(fileKey, nodeId)` | Functionally equivalent. Native requires explicit `fileKey` + `nodeId`. |
+| `figma_capture_screenshot` | `get_screenshot(fileKey, nodeId)` | Same mapping. |
+| `figma_get_file_data` | `get_metadata(fileKey, nodeId)` or `get_design_context(fileKey, nodeId)` | `get_metadata` returns structural XML. `get_design_context` is richer (includes code + screenshot). |
+| `figma_get_component` | `get_metadata(fileKey, nodeId)` | Replacement for component inspection. Can also use `use_figma` for full detail. |
+| `figma_get_component_for_development` | `get_design_context(fileKey, nodeId)` | Replacement for component data + visual reference. |
+| `figma_get_variables` | `use_figma` script: `figma.variables.getLocalVariableCollectionsAsync()` | Console returns file-wide collections. Native `get_variable_defs` is node-scoped only — use a script for file-wide access. |
+| `figma_get_token_values` | `use_figma` script reading variable values per mode | Same gap as above. Mode/value data needs `use_figma` scripts. |
+| `figma_get_styles` | `search_design_system(query, fileKey, includeStyles: true)` | Console lists all styles directly. Native requires a search query, or use a `use_figma` script: `figma.getLocalPaintStyles()`. |
+| `figma_search_components(name)` | `search_design_system(query, fileKey, includeComponents: true)` | Functionally equivalent. Native also searches variables/styles in the same call. |
+| `figma_get_selection` | `use_figma` script: `figma.currentPage.selection` | No direct tool equivalent on native. |
+
+### Console MCP Tools
+
+For the latest Console MCP tools and usage, see: https://docs.figma-console-mcp.southleft.com/tools
 
 | Tool | Purpose |
 |------|---------|
@@ -90,21 +104,36 @@ Before using MCP tools, verify the connection:
 | `figma_get_design_system_summary` | Get overview of entire design system |
 | `figma_search_components` | Find components by name |
 
+### Native MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `use_figma` | Execute Plugin API JavaScript (equivalent of `figma_execute`) |
+| `get_screenshot` | Capture visual of a node |
+| `get_metadata` | Structural XML inspection of a node |
+| `get_design_context` | Rich node context with code, screenshot, metadata |
+| `search_design_system` | Search components, variables, and styles by query |
+| `get_variable_defs` | Variable definitions bound to a specific node |
+
 ### Tool Selection by Spec Type
 
-| Spec Type | Key Tools |
-|-----------|-----------|
-| Anatomy / Property | `figma_execute` (extraction, template import, rendering), `figma_take_screenshot` (validation) |
-| Screen Reader | `figma_take_screenshot`, `figma_get_file_data` (for states/variants), `figma_execute` (template import, rendering) |
-| Color Annotation | `figma_get_variables`, `figma_get_token_values`, `figma_get_styles`, `figma_execute` (template import, rendering) |
-| API Overview | `figma_get_file_data` (variant axes), `figma_get_component` (properties), `figma_execute` (template import, rendering) |
-| Structure Spec | `figma_get_token_values`, `figma_execute` (for measurements, template import, rendering) |
-| Motion Spec | `figma_execute` (template import, rendering), `figma_take_screenshot` (validation) |
+| Spec Type | Key Operations |
+|-----------|----------------|
+| Anatomy / Property | Plugin JS execution (extraction, template import, rendering), screenshot (validation) |
+| Screen Reader | Screenshot, file data (for states/variants), Plugin JS execution (template import, rendering) |
+| Color Annotation | Variables, token values, styles, Plugin JS execution (template import, rendering) |
+| API Overview | File data (variant axes), component metadata (properties), Plugin JS execution (template import, rendering) |
+| Structure Spec | Token values, Plugin JS execution (for measurements, template import, rendering) |
+| Motion Spec | Plugin JS execution (template import, rendering), screenshot (validation) |
 
 ## Architecture
 
+uSpec supports two Figma MCP providers. The `mcpProvider` field in `uspecs.config.json` determines which tool calls the agent uses. Each skill's MCP Adapter section translates generic operations to the correct provider-specific calls.
+
 ```
-AI Agent (Cursor / Claude Code / Codex)  ──>  Figma Console MCP  ──>  Figma (via figma_execute)
+                                ┌─── Figma Console MCP ──── figma_execute ───┐
+AI Agent (Cursor / Claude /  ───┤                                            ├──> Figma
+         Code / Codex)          └─── Figma MCP (Native) ─── use_figma ──────┘
 ```
 
 ```
@@ -113,7 +142,7 @@ Agent Host          Figma MCP           Figma
    |-- get context ---->|                  |
    |<-- component data -|                  |
    |                    |                  |
-   |-- figma_execute ---|----------------->|
+   |-- execute JS ------|----------------->|
    |  (import template, |                  |-- render annotation
    |   create instances,|                  |-- place markers
    |   fill tables)     |                  |-- build exhibits
@@ -127,9 +156,9 @@ Agent Host          Figma MCP           Figma
 | Claude Code | `CLAUDE.md` | `.mcp.json` (project root) | `.claude/skills/` (only `firstrun` until user runs it) |
 | Codex | `AGENTS.md` | `.codex/config.toml` | `.agents/skills/` (only `firstrun` until user runs it) |
 
-Most skills extract component data via MCP, then render annotations directly in Figma using `figma_execute`. Each skill imports its documentation template (by component key from `uspecs.config.json`), detaches it, and fills text fields, clones sections, and builds tables programmatically. The motion skill is different: its data comes from an After Effects export script (`motion/export-timeline.jsx`) that pre-computes segments, easing values, formatted labels, and `composition.durationMs`. Raw keyframes are stripped from the output — the JSON contains only segments. The agent passes segment data and `pxPerMs` to the Figma code, which computes bar positions at render time.
+Most skills extract component data via MCP, then render annotations directly in Figma using Plugin API JavaScript (`figma_execute` on Console MCP, `use_figma` on native MCP). Each skill imports its documentation template (by component key from `uspecs.config.json`), detaches it, and fills text fields, clones sections, and builds tables programmatically. The motion skill is different: its data comes from an After Effects export script (`motion/export-timeline.jsx`) that pre-computes segments, easing values, formatted labels, and `composition.durationMs`. Raw keyframes are stripped from the output — the JSON contains only segments. The agent passes segment data and `pxPerMs` to the Figma code, which computes bar positions at render time.
 
-The anatomy and property skills share a single template (`anatomyOverview`); anatomy clones and fills its sections first, then property re-uses the same detached frame to build its own chapters. The voice, color, API, structure, changelog, and motion skills each have their own template and render independently.
+The anatomy and property skills share a single template (`anatomyOverview`); anatomy clones and fills its sections first, then property re-uses the same detached frame to build its own chapters. The voice, color, API, structure, and motion skills each have their own template and render independently.
 
 ### Template Keys
 
@@ -143,20 +172,19 @@ Template component keys are stored in `uspecs.config.json` and configured via th
 | `apiOverview` | API overview |
 | `structureSpec` | Structure specification |
 | `propertyOverview` | Property overview |
-| `changelog` | Changelog (create new) |
 | `motionSpec` | Motion specification |
 
 ## Components
 
 ### Skills
 
-All skills render directly in Figma via `figma_execute`, following a shared pattern:
+All skills render directly in Figma via Plugin API JavaScript (`figma_execute` on Console MCP, `use_figma` on native MCP), following a shared pattern:
 
 1. **Extract** — Gather component data via MCP tools and AI reasoning (motion skill reads pre-computed data from AE export JSON instead)
 2. **Import template** — `figma.importComponentByKeyAsync` with the skill's template key (from `uspecs.config.json`), create instance, detach
 3. **Fill header** — Set component name, description, and header text
 4. **Build content** — Clone template sections, fill text fields, build tables, create component instances where needed
-5. **Validate** — `figma_take_screenshot` to verify output
+5. **Validate** — Screenshot to verify output (`figma_take_screenshot` or `get_screenshot`)
 
 **Template keys:** All template keys are stored in `uspecs.config.json` under the `templateKeys` object and configured via the `firstrun` skill. Each skill has its own template key.
 
@@ -180,9 +208,6 @@ All skills render directly in Figma via `figma_execute`, following a shared patt
 | `create-color` | Color annotation | Per-variant sections with element-to-token mapping tables (Strategy A for ≤6 variants; Strategy B consolidates states into columns for >6) |
 | `create-api` | API overview | Main property table, sub-component tables, configuration examples |
 | `create-structure` | Structure spec | Per-section dimensional tables with dynamic columns for size/density variants |
-| `create-changelog` | Changelog | Date entries with change items, bullet-formatted descriptions |
-| `update-changelog` | Changelog (existing frame) | New date entry cloned and inserted at top of existing changelog |
-| `convert-changelog` | — (reads existing frame) | Extracts an existing Figma changelog into structured JSON |
 | `create-motion` | Motion spec | Timeline bars with easing-colored segments (bar positions computed in Figma code), detail table from pre-computed segments |
 
 ### Agent Instructions
@@ -191,7 +216,7 @@ Each spec type has its own instruction file that defines the agent's behavior, d
 
 ### Template Infrastructure
 
-Template component keys are stored in `uspecs.config.json` at the project root and configured via the `firstrun` skill. Each skill reads its key from this file and imports the template directly via `figma_execute` calling `figma.importComponentByKeyAsync`.
+Template component keys are stored in `uspecs.config.json` at the project root and configured via the `firstrun` skill. Each skill reads its key from this file and imports the template via Plugin API JavaScript calling `figma.importComponentByKeyAsync`.
 
 ### Template Key Config
 
@@ -201,6 +226,7 @@ The template infrastructure uses a config file for extensibility:
 
 ```json
 {
+  "mcpProvider": "figma-console",
   "environment": "cursor",
   "fontFamily": "Inter",
   "templateKeys": {
@@ -210,25 +236,26 @@ The template infrastructure uses a config file for extensibility:
     "apiOverview": "key-from-firstrun",
     "propertyOverview": "key-from-firstrun",
     "structureSpec": "key-from-firstrun",
-    "changelog": "key-from-firstrun",
     "motionSpec": "key-from-firstrun"
   }
 }
 ```
+
+**`mcpProvider`:** Determines which Figma MCP the skills use. Values: `"figma-console"` (Southleft Console MCP with Desktop Bridge) or `"figma-mcp"` (native Figma MCP with write access). Set by the `firstrun` skill. Each skill reads this value and follows the matching tool-call path in its MCP Adapter section.
 
 **`fontFamily` and the `__FONT_FAMILY__` placeholder:** The `fontFamily` value (detected by `firstrun` from the template library) is used in rendering scripts that create text labels in Figma. Skills declare `const FONT_FAMILY = '__FONT_FAMILY__';` at the top of each rendering script, and the agent replaces `__FONT_FAMILY__` with the value from `uspecs.config.json` before execution. This follows the same `__PLACEHOLDER__` convention used for all dynamic values in `figma_execute` scripts.
 
 **Adding a new template type requires:**
 
 1. Add a new key to `uspecs.config.json` under `templateKeys`
-2. Create a new SKILL.md in `.cursor/skills/<name>/` that reads the key and uses `figma.importComponentByKeyAsync` to import the template
+2. Create a new SKILL.md in `.cursor/skills/<name>/` with the MCP Adapter preamble and a workflow that reads the key and uses `figma.importComponentByKeyAsync` to import the template
 3. Update the `firstrun` skill to search for and extract the new template's component key
 4. Run `./utils/sync-skills.sh` to sync the new skill (and updated `firstrun`) to `.claude/skills/` and `.agents/skills/`
 5. Add the new skill to the tables in `CLAUDE.md`, `AGENTS.md`, and this file
 
 ## Cloning Logic
 
-All skills follow a shared "clone from pristine template, fill, hide/remove original" pattern implemented inline within each `figma_execute` call:
+All skills follow a shared "clone from pristine template, fill, hide/remove original" pattern implemented inline within each Plugin API call (`figma_execute` / `use_figma`):
 
 1. **Find template** — Locate the hidden template node by name (e.g., `#section-template`, `#variant-template`, `#row-template`)
 2. **Clone per data item** — For each item in the data array, call `template.clone()` and append the clone to the template's parent
@@ -236,11 +263,11 @@ All skills follow a shared "clone from pristine template, fill, hide/remove orig
 4. **Fill content** — Load fonts, set text fields, configure properties on each clone
 5. **Remove or hide original** — After all clones are created, either `template.remove()` (for row-level templates) or `template.visible = false` (for section-level templates)
 
-This pattern nests at multiple levels. For example, the screen reader skill clones state templates, then within each state clones platform section templates, then within each section clones table templates, then within each table clones row templates. Each nesting level follows the same clone-fill-remove pattern within a single `figma_execute` call.
+This pattern nests at multiple levels. For example, the screen reader skill clones state templates, then within each state clones platform section templates, then within each section clones table templates, then within each table clones row templates. Each nesting level follows the same clone-fill-remove pattern within a single Plugin API call.
 
 ## Stability
 
-Each skill splits work across multiple `figma_execute` calls to avoid timeouts — typically one call per section, variant, or state. This keeps each call's execution time short and lets Figma process between calls. Complex specs (e.g., structure with many sections, screen reader with many states) benefit most from this pattern.
+Each skill splits work across multiple Plugin API calls (`figma_execute` / `use_figma`) to avoid timeouts — typically one call per section, variant, or state. This keeps each call's execution time short and lets Figma process between calls. Complex specs (e.g., structure with many sections, screen reader with many states) benefit most from this pattern.
 
 ## Documentation Site
 
@@ -286,9 +313,6 @@ docs/
 | `.cursor/skills/create-color/SKILL.md` | Color: consolidated extraction (token resolution, axis classification, boolean gating, sub-component tagging, mode discovery), AI strategy selection, element-to-token mapping tables |
 | `.cursor/skills/create-api/SKILL.md` | API: main table, sub-component tables, configuration examples |
 | `.cursor/skills/create-structure/SKILL.md` | Structure: dynamic columns, hierarchy indicators, dimensional tables |
-| `.cursor/skills/create-changelog/SKILL.md` | Changelog: template import, entry cloning, bullet formatting |
-| `.cursor/skills/update-changelog/SKILL.md` | Changelog update: clone entry into existing frame |
-| `.cursor/skills/convert-changelog/SKILL.md` | Changelog convert: extract existing Figma changelog to JSON |
 | `.cursor/skills/create-motion/SKILL.md` | Motion: timeline bars, pre-computed easing segments, detail table |
 | `.cursor/skills/firstrun/SKILL.md` | First run: environment selection, skill sync, template library configuration |
 
@@ -320,6 +344,5 @@ Only `firstrun` is committed in `.claude/skills/` and `.agents/skills/` — all 
 | `api/agent-api-instruction.md` | API overview: data schema, examples, agent behavior |
 | `api/api-library.md` | API documentation reference patterns |
 | `structure/agent-structure-instruction.md` | Structure spec: data schema, examples, agent behavior |
-| `changelog/agent-changelog-instruction.md` | Changelog: writing style, schema, validation rules |
 | `motion/agent-motion-instruction.md` | Motion spec: JSON schema (with pre-computed segments), rendering rules, timeline layout |
 | `motion/export-timeline.jsx` | After Effects export script: keyframe extraction, segment computation, cubic-bezier conversion, value formatting, keyframe stripping |

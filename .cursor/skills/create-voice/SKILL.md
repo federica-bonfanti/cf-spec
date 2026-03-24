@@ -7,6 +7,25 @@ description: Generate screen reader accessibility specifications for VoiceOver (
 
 Generate a screen reader specification directly in Figma — focus order, platform-specific property tables, and announcement patterns organized by component state.
 
+## MCP Adapter
+
+Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for every MCP call in this skill.
+
+| Operation | `figma-console` | `figma-mcp` |
+|-----------|-----------------|-------------|
+| Verify connection | `figma_get_status` | Skip — implicit. If first `use_figma` call fails, guide user to check MCP setup. |
+| Navigate to file | `figma_navigate` with URL | Extract `fileKey` from URL (`figma.com/design/:fileKey/...`). No navigate needed. |
+| Take screenshot | `figma_take_screenshot` | `get_screenshot` with `fileKey` + `nodeId` |
+| Execute Plugin JS | `figma_execute` with `code` | `use_figma` with `fileKey`, `code`, `description`. **JS code is identical** — no wrapper changes. |
+| Search components | `figma_search_components` | `search_design_system` with `query` + `fileKey` + `includeComponents: true` |
+| Get file/component data | `figma_get_file_data` / `figma_get_component` | `get_metadata` or `get_design_context` with `fileKey` + `nodeId` |
+| Get variables (file-wide) | `figma_get_variables` | `use_figma` script: `return await figma.variables.getLocalVariableCollectionsAsync();` |
+| Get token values | `figma_get_token_values` | `use_figma` script reading variable values per mode/collection |
+| Get styles | `figma_get_styles` | `search_design_system` with `includeStyles: true`, or `use_figma`: `return figma.getLocalPaintStyles();` |
+| Get selection | `figma_get_selection` | `use_figma` script: `return figma.currentPage.selection.map(n => ({id: n.id, name: n.name, type: n.type}));` |
+
+**`figma-mcp` requires `fileKey` on every call.** Extract it once from the user's Figma URL at the start of the workflow. For branch URLs (`figma.com/design/:fileKey/branch/:branchKey/:fileName`), use `:branchKey` as the fileKey.
+
 ## Inputs Expected
 
 - **Figma link**: URL to a component set or standalone component in Figma (preferred)

@@ -223,7 +223,7 @@ Follow the schema in the instruction file. Build the data as a structured object
 - `generalNotes`: string (optional)
 - `mainTable`: object with `properties` array, each with `property`, `values`, `required` (boolean), `default`, `notes`, optional `isSubProperty`
 - `subComponentTables`: array (optional), each with `name`, `description` (optional), `properties` array (each with `property`, `values`, `required`, `default`, `notes`, optional `isSubProperty`)
-- `configurationExamples`: array (1-4), each with `title`, `variantProperties` (object mapping Figma variant/boolean property keys to values for instantiating the component preview), `properties` array (each with `property`, `value`, `notes`)
+- `configurationExamples`: array (1-4), each with `title`, `variantProperties` (object mapping Figma variant/boolean property keys to values for instantiating the component preview), optional `childOverrides` (array of per-child property override objects for slot children, index 0 = first child), `properties` array (each with `property`, `value`, `notes`)
 
 ### Step 7: Audit
 
@@ -496,15 +496,17 @@ return { success: true };
 
 Run **one `figma_execute` call per configuration example** to avoid timeouts.
 
-For each example, run (replace `__FRAME_ID__`, `__EXAMPLE_TITLE__`, `__COMPONENT_SET_NODE_ID__`, `__VARIANT_PROPERTIES_JSON__`, and `__EXAMPLE_PROPERTIES_JSON__`):
+For each example, run (replace `__FRAME_ID__`, `__EXAMPLE_TITLE__`, `__COMPONENT_SET_NODE_ID__`, `__VARIANT_PROPERTIES_JSON__`, `__CHILD_OVERRIDES_JSON__`, and `__EXAMPLE_PROPERTIES_JSON__`):
 
 - `__VARIANT_PROPERTIES_JSON__` is an object mapping **Figma property keys** (exactly as returned by `componentPropertyDefinitions`) to values. This is used to instantiate and configure the live component preview. Include variant axes and boolean toggles needed for the example.
+- `__CHILD_OVERRIDES_JSON__` is an array of per-child property override objects for composable slot children (index 0 = first child). Use `[]` when no child overrides are needed. Each entry maps Figma property keys to values, same format as `variantProperties`.
 
 ```javascript
 const FRAME_ID = '__FRAME_ID__';
 const EXAMPLE_TITLE = '__EXAMPLE_TITLE__';
 const COMPONENT_SET_ID = '__COMPONENT_SET_NODE_ID__';
 const VARIANT_PROPS = __VARIANT_PROPERTIES_JSON__;
+const CHILD_OVERRIDES = __CHILD_OVERRIDES_JSON__;
 const EXAMPLE_PROPERTIES = __EXAMPLE_PROPERTIES_JSON__;
 
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
@@ -552,6 +554,20 @@ if (preview) {
   if (Object.keys(VARIANT_PROPS).length > 0) {
     instance.setProperties(VARIANT_PROPS);
   }
+
+  // Apply per-child overrides for composable slot children
+  if (CHILD_OVERRIDES && CHILD_OVERRIDES.length > 0) {
+    const slot = instance.children[0];
+    if (slot && slot.children) {
+      for (let i = 0; i < Math.min(CHILD_OVERRIDES.length, slot.children.length); i++) {
+        const child = slot.children[i];
+        if (child.type === 'INSTANCE' && Object.keys(CHILD_OVERRIDES[i]).length > 0) {
+          try { child.setProperties(CHILD_OVERRIDES[i]); } catch (e) {}
+        }
+      }
+    }
+  }
+
   preview.appendChild(instance);
   instance.layoutAlign = 'INHERIT';
 }
@@ -614,7 +630,8 @@ return { success: true };
 - The API overview template key is stored in `uspecs.config.json` under `templateKeys.apiOverview` and is configured via `@firstrun`.
 - Conditional sub-components: If `subComponentTables` is empty or absent, the `#subcomponent-chapter-template` is hidden. If present, each sub-component gets its own cloned section with its own property table.
 - Hierarchy indicators: Both the main table (`#hierarchy-indicator`) and sub-component tables (`#subprop-hierarchy-indicator`) support `isSubProperty` for indented child rows.
-- Configuration examples: Each example has a title, a Preview frame containing a live component instance configured with the example's variant/boolean properties, and a property/value table. The `#example-asset-description` text placeholder is removed and replaced by the actual component instance. Examples are rendered as separate cloned sections from `#config-example-chapter-template`.
+- Configuration examples: Each example has a title, a Preview frame containing a live component instance configured with the example's variant/boolean properties (and optionally `childOverrides` for slot children), and a property/value table. The `#example-asset-description` text placeholder is removed and replaced by the actual component instance. Examples are rendered as separate cloned sections from `#config-example-chapter-template`.
+- Composable slot child overrides: When a component uses composable slots and a configuration example needs child instances configured differently from their defaults (e.g., multiple items selected, different sizes, icon-only layout), use `childOverrides` to specify per-child property overrides. Each array entry corresponds to one slot child by index. Use the same Figma property keys as `variantProperties`. The script uses direct child access (`instance.children[0].children`) — not `findAll` — to avoid errors when traversing into nested instances.
 - The target node can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). The extraction script detects the type and returns `isComponentSet` accordingly. When the node is a standalone component, there are no variant axes — only boolean, instance swap, and variable mode properties apply. Instance creation in Step 12 uses `compNode.createInstance()` directly for standalone components.
 - The extraction script (Step 4b) programmatically reads `componentPropertyDefinitions` from the component set or component, capturing all variant axes (with options and defaults), boolean toggles (with associated layer names and raw keys), and instance swap properties. This structured data makes property identification in Step 5 deterministic rather than relying solely on LLM interpretation of MCP tool output. The `rawKey` values (including `#nodeId` suffixes) are needed for `setProperties()` when creating configuration example previews in Step 12.
 - The instruction file (`api/agent-api-instruction.md`) contains the JSON schema, examples, and property classification rules. The AI reasoning for property identification is unchanged — only the delivery mechanism has changed.

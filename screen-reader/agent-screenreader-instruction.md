@@ -113,9 +113,11 @@ Ask these diagnostic questions:
 ### Step 4: Enumerate States
 List all states to document (enabled, disabled, selected, expanded, error, focused, etc.). For each state, determine if the focus order changes.
 
+**Behavioral states from user context:** Review the user's description for behavioral configurations (e.g., single-select vs. multi-select, read-only vs. editable) that are not represented as Figma variant axes. These should be documented as separate state entries when they produce different semantic properties (different roles, different ARIA attributes, different selection models). For grouped controls, document one state per selection behavior rather than generic enabled/disabled.
+
 **State grouping — collapse states with identical accessibility semantics:**
 
-Not every visual state warrants its own spec entry. Compare states on three dimensions: (1) focus stop count, (2) semantic properties (roles, labels, values, traits, ARIA attributes), and (3) announcement pattern. If two or more states are identical on all three, group them into a single entry with a combined title (e.g., "Text field Enabled / Pressed / Active"). Document one representative per group. Always keep separate entries for states with unique accessibility behavior: error, disabled, read-only, loading, or any state that changes the focus stop count.
+Not every visual state warrants its own spec entry. Compare states on three dimensions: (1) focus stop count, (2) semantic properties (roles, labels, values, traits, ARIA attributes), and (3) announcement pattern. If two or more states are identical on all three, group them into a single entry with a combined title (e.g., "Text field Enabled / Pressed / Active"). Document one representative per group. Always keep separate entries for states with unique accessibility behavior: error, disabled (component-level only — when disabled is a sub-component property, document it as an archetype within a behavioral state), read-only, loading, or any state that changes the focus stop count.
 
 ### Step 5: Map to Platform Properties
 For each focusable part in each state, document the platform-specific properties.
@@ -222,6 +224,7 @@ interface FocusElement {
   index: number;
   name: string;
   bbox: { x: number; y: number; w: number; h: number };
+  slotIndex?: number;               // present when extracted from a composable slot with identically-named siblings
   isFocusStop: boolean;             // true if this element is an actual focus stop (set during merge analysis)
 }
 
@@ -235,6 +238,7 @@ interface StateData {
   state: string;                  // State name: "enabled", "disabled", "Tab selected"
   description?: string;           // Optional description for this state
   variantProps: Record<string, string>;  // Variant axis values for this state's preview instance
+  artworkLabels: string[];        // Realistic labels for artwork preview, replacing "Label" placeholders in document order
   sections: SectionData[];        // Platform sections only: VoiceOver, TalkBack, ARIA
 }
 
@@ -311,10 +315,11 @@ VoiceOver (iOS)
 
 ### Archetype Strategy
 
-For grouped controls (tab bar, radio group), don't document every item. Document representative archetypes:
+For grouped controls (tab bar, radio group, button group), don't document every item. Document representative archetypes:
 - "Selected item" + "Unselected item" covers most cases
-- Add "Disabled item" only if behavior differs
-- Use actual content from the image for realistic examples
+- Add "Disabled item" as an archetype within a state when sub-component disabled behavior differs — do not create a standalone "Disabled" state for sub-component-level disabled
+- For components with selection models (single-select, multi-select), document one state per selection behavior rather than generic enabled/disabled
+- Use actual content from the image for realistic examples — both in table data AND in artwork previews
 
 ---
 
@@ -391,8 +396,8 @@ Before rendering in Figma, verify your structured data against these checks:
 | ☐ **States grouped** | States with identical screen reader behavior (same focus stops, same semantic properties, same announcements) are grouped under a single entry. Each group's title lists all member states. |
 | ☐ **Guidelines describe merging** | For compound components, guidelines explain what merges and what the user actually lands on |
 | ☐ **Straight quotes** | JSON uses ASCII `"` not curly quotes `""` |
-| ☐ **No placeholders** | All values use actual text from the component, not `<label>` |
-| ☐ **Preview placeholder has instance** | Each state's `Preview placeholder` contains a centered component instance |
+| ☐ **No placeholders** | All values use actual text from the component, not `<label>` — applies to both table data AND artwork preview labels |
+| ☐ **Preview placeholder has component** | Each state's `Preview placeholder` contains a centered component preview (instance, or detached frame after label modification) |
 | ☐ **Markers match focus stops** | Numbered markers correspond 1:1 to the focus order entries — rendered for every state, even single-stop components |
 | ☐ **Markers positioned correctly** | Marker #1 is left of component, even numbers above, odd numbers below — with connecting lines to their target elements |
 | ☐ **`elements` populated** | `elements` array has entries from extraction with `isFocusStop` set based on merge analysis (when Figma link provided) |

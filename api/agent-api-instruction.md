@@ -203,6 +203,7 @@ interface SubComponentProperty {
 interface ConfigurationExample {
   title: string;          // "Example 1 — Primary button"
   variantProperties: Record<string, string | boolean>; // Figma property keys → values for instantiating the live component preview
+  childOverrides?: Record<string, string | boolean>[]; // Per-child property overrides applied to slot children in order (index 0 → first child, etc.)
   properties: ExampleProperty[];
 }
 
@@ -367,8 +368,10 @@ Provide 1-4 examples showing common component configurations. Each example demon
 
 1. **Title format:** "Example N — [Brief description]"
 2. **variantProperties:** Object mapping Figma property keys (exactly as returned by `componentPropertyDefinitions`) to values. Used to instantiate a live component preview — include all variant axes and boolean toggles needed for the example.
-3. **Properties:** Only include properties relevant to this example
-4. **Notes:** Brief clarification, or `"–"` if self-explanatory
+3. **childOverrides:** Optional. Array of per-child property override objects for composable slot children (index 0 = first child). Use when the example needs child instances configured differently from defaults (e.g., multiple items selected, different size, icon-only layout). Omit when children keep their defaults.
+4. **Properties:** Only include properties relevant to this example
+5. **Item-level properties:** When an example demonstrates behavior that depends on per-item state (e.g., multi-select with specific items selected, mixed disabled states), include item-level property values in the table using the convention `item N propertyName` (e.g., `item 1 isSelected`, `item 4 isSelected`). This ensures the table reflects what the preview shows.
+6. **Notes:** Brief clarification, or `"–"` if self-explanatory
 
 ### Choosing Examples
 
@@ -503,6 +506,7 @@ Before returning the JSON, verify:
 | ☐ **Hierarchy indicators** | Nested properties have `isSubProperty: true` |
 | ☐ **Configuration examples** | 1-4 examples showing common, variant, and complex configurations |
 | ☐ **variantProperties for previews** | Each example has `variantProperties` mapping Figma property keys to values for instantiating a live component preview |
+| ☐ **childOverrides match example tables** | When `childOverrides` sets per-child properties, the example table includes corresponding `item N propertyName` rows so the table reflects the preview |
 | ☐ **Numbered slots collapsed** | If Figma uses sequential numbered slots (e.g., `tab1`–`tab8`) with the same sub-component, they are documented as a single array property, not individual properties |
 | ☐ **No transient states as properties** | Hover, pressed, and focused are not listed as property values — only persistent states (disabled, selected, loading) are documented as booleans |
 | ☐ **No event handlers** | `onPress`, `onChange`, `onSelectionChange`, etc. are omitted — these are code-level concerns, not design properties |
@@ -562,6 +566,7 @@ Note: Event handlers (onPress, onChange, onFocus) are code-level implementation 
 - **Boolean + sub-component variant not merged into enum:** When Figma uses a boolean to show/hide a sub-component that has its own `Type` variant (e.g., `Leading artwork: true/false` + Artwork container `Type: Icon, Vector, Custom`), merge into a single enum with `none` (e.g., `leadingArtwork: none, icon, vector, custom`). Do not output a `hasLeadingArtwork` boolean
 - **Event handlers included:** `onPress`, `onChange`, `onSelectionChange`, etc. are code-level implementation details not visible in Figma. Omit them from the spec
 - **Unnecessary `key` on array items:** When items are in an array, the index and label provide sufficient identity. Do not add a `key` property unless the component specifically requires stable IDs that differ from labels
+- **Example table doesn't reflect preview state:** When an example uses `childOverrides` to configure child instances (e.g., selecting multiple items, changing size or layout), the table must include matching `item N propertyName` rows — otherwise the preview and table tell different stories
 
 ---
 

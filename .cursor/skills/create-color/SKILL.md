@@ -129,7 +129,7 @@ async function resolveVariableToken(binding) {
     const v = await figma.variables.getVariableByIdAsync(binding.id);
     if (v) {
       collectionIdSet.add(v.variableCollectionId);
-      return v.name;
+      return v.codeSyntax?.WEB || v.name;
     }
   } catch {}
   return null;
@@ -144,9 +144,12 @@ async function extractColorBindings(node, path) {
       if (fill.visible === false) continue;
       if (fill.type === 'SOLID') {
         const hex = rgbToHex(fill.color);
-        const token = fill.boundVariables?.color
+        let token = fill.boundVariables?.color
           ? await resolveVariableToken(fill.boundVariables.color)
           : null;
+        if (!token && node.fillStyleId && node.fillStyleId !== '' && typeof node.fillStyleId === 'string') {
+          try { const style = await figma.getStyleByIdAsync(node.fillStyleId); if (style) token = style.name; } catch {}
+        }
         const prop = node.type === 'TEXT' ? 'text fill' : 'fill';
         entries.push({ element: elementName, property: prop, hex, token, opacity: fill.opacity });
       }
@@ -158,9 +161,12 @@ async function extractColorBindings(node, path) {
       if (stroke.visible === false) continue;
       if (stroke.type === 'SOLID') {
         const hex = rgbToHex(stroke.color);
-        const token = stroke.boundVariables?.color
+        let token = stroke.boundVariables?.color
           ? await resolveVariableToken(stroke.boundVariables.color)
           : null;
+        if (!token && node.strokeStyleId && node.strokeStyleId !== '' && typeof node.strokeStyleId === 'string') {
+          try { const style = await figma.getStyleByIdAsync(node.strokeStyleId); if (style) token = style.name; } catch {}
+        }
         entries.push({ element: elementName, property: 'stroke', hex, token, opacity: stroke.opacity });
       }
     }
@@ -171,9 +177,12 @@ async function extractColorBindings(node, path) {
       if (effect.visible === false) continue;
       if (effect.color) {
         const hex = rgbToHex(effect.color);
-        const token = effect.boundVariables?.color
+        let token = effect.boundVariables?.color
           ? await resolveVariableToken(effect.boundVariables.color)
           : null;
+        if (!token && node.effectStyleId && node.effectStyleId !== '' && typeof node.effectStyleId === 'string') {
+          try { const style = await figma.getStyleByIdAsync(node.effectStyleId); if (style) token = style.name; } catch {}
+        }
         const effectType = effect.type === 'DROP_SHADOW' ? 'drop shadow'
           : effect.type === 'INNER_SHADOW' ? 'inner shadow'
           : effect.type;
@@ -373,10 +382,10 @@ if (collectionIdSet.size > 0) {
         if (modeValue && modeValue.type === 'VARIABLE_ALIAS') {
           const aliased = await figma.variables.getVariableByIdAsync(modeValue.id);
           if (aliased) {
-            modeTokenMap[mode.name][variable.name] = aliased.name;
+            modeTokenMap[mode.name][variable.codeSyntax?.WEB || variable.name] = aliased.codeSyntax?.WEB || aliased.name;
           }
         } else {
-          modeTokenMap[mode.name][variable.name] = variable.name;
+          modeTokenMap[mode.name][variable.codeSyntax?.WEB || variable.name] = variable.codeSyntax?.WEB || variable.name;
         }
       }
     }
@@ -426,6 +435,12 @@ Use this data in Step 4c to interpret and plan the rendering strategy. Entries w
 Using the consolidated extraction output from Step 4b, perform the following interpretation steps (no additional `figma_execute` calls needed — all data is already in the extraction payload):
 
 1. **Validate extraction**: Confirm `variantColorData` is non-empty and `sampledCount > 0`. If the component is a standalone `COMPONENT` (not a set), expect a single variant entry.
+1b. **Container detection**: Check if the parent component has any direct color entries (entries WITHOUT `subComponentName`). If ALL entries across all variants have `subComponentName` and the parent contributes no direct color entries, this is a container/slot component. In this case:
+   - Find the sub-component's component set node ID (search the file for the `subComponentName` value as a COMPONENT_SET)
+   - Re-run the Step 4b extraction script targeting the sub-component's node ID
+   - Use the sub-component's axes and variant structure for the rest of the workflow
+   - Keep the parent component name as the annotation title
+   - Note the container relationship in `generalNotes`
 2. **Merge boolean delta**: If `booleanDelta.deltaCount > 0`, merge the `booleanDelta.delta` entries into the default variant's color entries. These represent elements hidden behind boolean toggles.
 3. **Annotate sub-component entries**: Entries with `subComponentName` come from nested instances. Include their actual tokens — use the sub-component name to write descriptive notes (e.g., `"Button container fill"`). Group sub-component entries together in the table when it aids readability.
 4. **Map elements to tokens**: Using the `variantColorData` entries, build element-to-token mappings. Entries with a non-null `token` field have a resolved variable binding; entries with `token: null` use a hard-coded color (note this in output).

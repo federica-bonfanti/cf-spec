@@ -68,12 +68,17 @@ Ask these diagnostic questions:
 4. **Are there nested components?** (Button inside a Section heading)
    → Include actual tokens for sub-component elements. Use the sub-component name (from extraction metadata) for richer element names and notes (e.g., "Button container fill").
 
+   **Special case — Container/slot component:** If the parent component has no color entries of its own (no fills, strokes, or effects) and ALL color comes from sub-component instances, re-target extraction to the sub-component and document it as the primary subject. Keep the parent name as the annotation title and note the container relationship in generalNotes.
+
 5. **Are there component-specific variable collections that control colors?**
    → Look for collections named after the component: "[Component] color", "[Component] style", "[Component] emphasis"
    → Common examples: "Tag color" (Default, Success, Warning, Error), "Badge style" (Neutral, Positive, Negative)
    → Each mode becomes its own variant entry with one "Spec" table — unless the two-gate model in the Complexity Analysis section indicates Strategy B (requires a non-state multiplier AND Strategy A sections > 6).
 
 ### Step 3: Extract Token Names
+
+**Note:** When using the SKILL.md workflow, the extraction script resolves tokens automatically — preferring variable `codeSyntax.WEB`, falling back to variable name, then paint style name. Manual conversion is only needed for non-SKILL.md workflows.
+
 Figma returns tokens in CSS variable format. Convert to clean token names:
 
 | Figma Format | Clean Token |
@@ -195,7 +200,7 @@ Add `generalNotes` when there are **color-related** details that apply across th
 - Size or layout info (e.g., "Small/Medium/Large variants only affect height")
 - Prop documentation (e.g., "Label is optional via showLabel prop")
 - Behavior unrelated to color (e.g., "Hover triggers tooltip after 200ms delay")
-- General component usage notes
+- General component usage notes unrelated to color
 
 **Omit `generalNotes` entirely if there's nothing color-specific to note.** Don't include filler content.
 
@@ -780,7 +785,7 @@ Before proceeding to the rendering steps, verify:
 | ☐ **Variant structure matches component type** | Static → one variant; interactive single-visual → one variant per state; interactive multi-visual → one variant per combination; mode-controlled → one variant per mode; consolidated → one variant per non-state axis value |
 | ☐ **States are variants, not nested tables** (Strategy A) | Each state is its own variant entry (gets its own preview), not multiple tables under a single variant |
 | ☐ **States are columns, not sections** (Strategy B) | States appear as column headers in the consolidated table, not as separate variant sections |
-| ☐ **Token names are clean** | No raw CSS variable syntax (`var(--content/contentPrimary)` → `contentPrimary`); no path prefixes left |
+| ☐ **Token names are clean** | No raw CSS variable syntax (`var(--content/contentPrimary)` → `contentPrimary`). Path-format names (e.g., `background/primary`) are valid when the variable has no `codeSyntax.WEB` — do not manually convert. |
 | ☐ **Element names consistent across states** | Same element uses the same name in every variant (e.g., "Background" is not renamed to "Fill" in Hover) |
 | ☐ **Sub-component tokens shown with context** | Entries with `subComponentName` include their actual tokens; `subComponentName` is used for richer notes and element names (e.g., `"Button container fill"`) — tokens are never discarded |
 | ☐ **Notes on every element** | Every element has a 3-8 word description; no empty notes or bare `"–"` |

@@ -7,7 +7,7 @@ description: Generate a visual anatomy annotation in Figma showing numbered mark
 
 Generate a hierarchical anatomy annotation directly in Figma — a **composition section** showing the top-level sub-components with numbered markers and a 4-column attribute table, then **per-child sections** for each INSTANCE sub-component showing all its internal elements (including hidden ones).
 
-Uses the **Anatomy & Properties v2** template with `#annotation-table`, type indicators (`#instance` / `#text`), and `#anatomy-section` cloning.
+Uses the **Anatomy & Properties v2** template with `#annotation-table`, type indicators (`#instance` / `#text` / `#slot`), and `#anatomy-section` cloning.
 
 ## MCP Adapter
 
@@ -87,20 +87,21 @@ Navigate to the component file and run the extraction script via `figma_execute`
 
 **Extract the node ID from the URL:** Figma URLs contain `node-id=123-456` → use `123:456`.
 
-This produces a **pre-classified element array** with deterministic element types, resolved prop bindings, and unwrapped slot wrappers — no AI reasoning needed for classification.
+This produces a **pre-classified element array** with deterministic element types, resolved prop bindings, and unwrapped instance wrappers — no AI reasoning needed for classification.
 
 **Classification enum** (closed set on each element's `classification` field):
 - `instance` — direct INSTANCE child
-- `instance-unwrapped` — FRAME/GROUP that wraps a single INSTANCE descendant (slot wrapper); displayed as the inner sub-component
+- `instance-unwrapped` — FRAME/GROUP that wraps a single INSTANCE descendant (instance wrapper); displayed as the inner sub-component
 - `text` — TEXT node
+- `slot` — SLOT node (composable slot container accepting child components via code)
 - `container` — FRAME/GROUP with multiple children (genuine layout container)
 - `structural` — RECTANGLE, VECTOR, ELLIPSE, LINE, POLYGON, STAR, BOOLEAN_OPERATION, or empty FRAME
 
 **Prop binding resolution:** Boolean properties are resolved to their controlling element by index (`boundElementIndex`), not by name matching. Each element carries `controlledByBoolean: { propName, rawKey, defaultValue }` when a boolean controls it, or `null` otherwise.
 
-**Slot-wrapper unwrapping:** FRAMEs that wrap a single INSTANCE descendant (through single-child nesting) are automatically unwrapped: `name` is replaced with the inner sub-component's `componentSetName`, `nodeType` is set to `'INSTANCE'`, and `originalName` preserves the FRAME name. The `bbox` stays on the wrapper for marker positioning.
+**Instance-wrapper unwrapping:** FRAMEs that wrap a single INSTANCE descendant (through single-child nesting) are automatically unwrapped: `name` is replaced with the inner sub-component's `componentSetName`, `nodeType` is set to `'INSTANCE'`, and `originalName` preserves the FRAME name. The `bbox` stays on the wrapper for marker positioning.
 
-**Section eligibility:** `shouldCreateSection` is set to `true` for all `instance` and `instance-unwrapped` elements, except those matching utility names (Spacer, Divider, etc.).
+**Section eligibility:** `shouldCreateSection` is set to `true` for all `instance` and `instance-unwrapped` elements, except those matching utility names (Spacer, Divider, etc.). All other classifications (`text`, `slot`, `container`, `structural`) default to `false` — they do not get per-child anatomy sections.
 
 Run this extraction script, replacing `TARGET_NODE_ID` with the actual node ID:
 
@@ -213,6 +214,10 @@ async function extractElement(node, index, artworkAbsX, artworkAbsY) {
       element.classification = childCount > 0 ? 'container' : 'structural';
       element.notes = childCount > 0 ? 'Container with ' + childCount + ' children' : 'Empty container';
     }
+  } else if (node.type === 'SLOT') {
+    element.classification = 'slot';
+    const childCount = ('children' in node) ? node.children.length : 0;
+    element.notes = 'Composable slot with ' + childCount + ' children';
   } else if (STRUCTURAL_TYPES.includes(node.type)) {
     element.classification = 'structural';
     element.notes = node.type;
@@ -236,6 +241,9 @@ const absY = variant.absoluteTransform[1][2];
 
 let childContainer = variant;
 while (childContainer.children.length === 1 && childContainer.children[0].type === 'FRAME' && childContainer.children[0].layoutMode !== 'NONE') {
+  childContainer = childContainer.children[0];
+}
+if (childContainer.children.length === 1 && childContainer.children[0].type === 'SLOT') {
   childContainer = childContainer.children[0];
 }
 
@@ -345,18 +353,18 @@ return {
 Save the returned JSON — you will use `componentName`, `compSetNodeId`, `isComponentSet`, `rootSize`, `elements`, `booleanProps`, `variantAxes`, and `instanceSwapProps` in subsequent steps.
 
 Each element carries pre-resolved fields:
-- `classification` — closed enum: `instance`, `instance-unwrapped`, `text`, `container`, `structural`
+- `classification` — closed enum: `instance`, `instance-unwrapped`, `text`, `slot`, `container`, `structural`
 - `controlledByBoolean` — `{ propName, rawKey, defaultValue }` or `null` (resolved by element index, not name matching)
 - `wrappedInstance` — component info for the inner INSTANCE (only on `instance-unwrapped` elements)
 - `originalName` — the FRAME name before unwrapping (only on `instance-unwrapped` elements)
 - `shouldCreateSection` — `true` for `instance`/`instance-unwrapped`, `false` for utility names and other types
 - `childVariantAxes`, `childVariantCount` — variant data from the child component set
 
-The `fullTree` field has been removed. Classification, slot-wrapper detection, and prop binding are now handled deterministically in the extraction script itself.
+The `fullTree` field has been removed. Classification, instance-wrapper detection, and prop binding are now handled deterministically in the extraction script itself.
 
 ### Step 4: Validate Extraction and Enrich Notes (AI Reasoning)
 
-This is a pure reasoning step — no `figma_execute` calls. The extraction script (Step 3) has already performed classification, slot-wrapper unwrapping, boolean binding, and section eligibility. Step 4 focuses on **validation** and **semantic note-writing**.
+This is a pure reasoning step — no `figma_execute` calls. The extraction script (Step 3) has already performed classification, instance-wrapper unwrapping, boolean binding, and section eligibility. Step 4 focuses on **validation** and **semantic note-writing**.
 
 Read the instruction file `anatomy/agent-anatomy-instruction.md`, then enrich the extraction data in-memory before proceeding to rendering.
 
@@ -365,7 +373,7 @@ Read the instruction file `anatomy/agent-anatomy-instruction.md`, then enrich th
 1. **Read** `anatomy/agent-anatomy-instruction.md` for note-writing guidelines and validation checklist.
 
 2. **Validate** the pre-classified extraction data:
-   - Every element has a `classification` from the closed set: `instance`, `instance-unwrapped`, `text`, `container`, `structural`.
+   - Every element has a `classification` from the closed set: `instance`, `instance-unwrapped`, `text`, `slot`, `container`, `structural`.
    - Every `instance-unwrapped` element has `wrappedInstance`, `originalName`, and `nodeType === 'INSTANCE'`.
    - Boolean bindings are resolved: check that `controlledByBoolean` is set on elements that should be boolean-controlled. If the extraction script missed a binding (e.g., `controlledByBoolean` is `null` on an element whose name matches a `booleanProps[].name`), flag it but do not re-run classification — note it in the element's notes.
    - `shouldCreateSection` is set on every `instance` and `instance-unwrapped` element.
@@ -376,9 +384,13 @@ Read the instruction file `anatomy/agent-anatomy-instruction.md`, then enrich th
 
 4. **Rewrite** the `notes` field for each element with semantic descriptions following the instruction file's note-writing guidelines. The extraction script produces generic notes (`"X instance"`, `"Container with N children"`, etc.) — replace these with role-based descriptions that explain each element's purpose. Use `controlledByBoolean.propName` for boolean-controlled notes, `classification` for role identification, and `childVariantCount` / `childVariantAxes` for variant context.
 
-5. **Validate** using the instruction file's checklist — ensure no generic notes remain, all hidden elements have unhide strategies, and all `instance`/`instance-unwrapped` elements have `shouldCreateSection` set. Do NOT add cross-references ("See X anatomy section") yet — those are appended after Step 8b confirms which sections were actually created.
+4b. **Integrate user-provided design context**: If the user provided design notes, behavioral descriptions, or usage constraints alongside the Figma link, incorporate them into the relevant elements' notes. Usage rules (e.g., "do not mix different button variants") should appear in parent-level composition notes. Behavioral context (e.g., "supports single select and multi select") should appear on the element that controls that behavior. Architectural context (e.g., "uses composable slot pattern in code") should appear on slot or container elements. Do not add user context as standalone text — weave it into the semantic notes.
 
-The enriched `elements` array (with updated `notes` and `unhideStrategy` fields — all other fields come from extraction) is used by all subsequent rendering steps.
+5. **Deduplicate repeated composition elements**: When multiple consecutive elements share the same `mainComponentSetId` (i.e., they are all instances of the same sub-component), collapse them into a single representative element with a `count` field. The first element is kept; subsequent duplicates are removed from the array. The representative element's name gets an `(xN)` suffix in the table, and its notes should explain the repeated pattern (e.g., "Button group (sub components) sub-component — individual button item, repeated per option (x4)"). This mirrors the per-child grouping logic in Step 8b but applies at the composition level.
+
+6. **Validate** using the instruction file's checklist — ensure no generic notes remain, all hidden elements have unhide strategies, and all `instance`/`instance-unwrapped` elements have `shouldCreateSection` set. Do NOT add cross-references ("See X anatomy section") yet — those are appended after Step 8b confirms which sections were actually created.
+
+The enriched `elements` array (with updated `notes`, `unhideStrategy`, and `count` fields — all other fields come from extraction) is used by all subsequent rendering steps.
 
 ### Step 5: Navigate to Destination
 
@@ -422,12 +434,15 @@ const textNodes = frame.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
-    }
+  const len = tn.characters ? tn.characters.length : 0;
+  if (len > 0) {
+    try {
+      const fonts = tn.getRangeAllFontNames(0, len);
+      for (const f of fonts) {
+        const key = f.family + '|' + f.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+      }
+    } catch {}
   }
 }
 await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
@@ -475,7 +490,7 @@ Run via `figma_execute`. Replace `__COMPOSITION_SECTION_ID__`, `__COMP_SET_NODE_
 
 **Artwork** (`#preview`): Place a component instance with hidden children made visible via property-aware unhide, then clone `#marker-example` for each element with connecting lines.
 
-**Table** (`#annotation-table`): Clone the template `row` for each element, filling 4 cells: `#number`, `#indicator` (show/hide `#instance` vs `#text`), `#element-name`, `#notes`.
+**Table** (`#annotation-table`): Clone the template `row` for each element, filling 4 cells: `#number`, `#indicator` (show one of `#instance` / `#text` / `#slot`, hide the other two), `#element-name`, `#notes`.
 
 ```javascript
 const COMPOSITION_SECTION_ID = '__COMPOSITION_SECTION_ID__';
@@ -553,6 +568,9 @@ const instAbsX = compInstance.absoluteTransform[0][2];
 const instAbsY = compInstance.absoluteTransform[1][2];
 let childContainer = compInstance;
 while (childContainer.children.length === 1 && childContainer.children[0].type === 'FRAME' && childContainer.children[0].layoutMode !== 'NONE') {
+  childContainer = childContainer.children[0];
+}
+if (childContainer.children.length === 1 && childContainer.children[0].type === 'SLOT') {
   childContainer = childContainer.children[0];
 }
 
@@ -703,15 +721,23 @@ for (const el of elements) {
   if (indicator) {
     const instIcon = indicator.findOne(n => n.name === '#instance');
     const textIcon = indicator.findOne(n => n.name === '#text');
+    const slotIcon = indicator.findOne(n => n.name === '#slot');
     if (el.nodeType === 'INSTANCE') {
       if (instIcon) instIcon.visible = true;
       if (textIcon) textIcon.visible = false;
+      if (slotIcon) slotIcon.visible = false;
     } else if (el.nodeType === 'TEXT') {
       if (instIcon) instIcon.visible = false;
       if (textIcon) textIcon.visible = true;
+      if (slotIcon) slotIcon.visible = false;
+    } else if (el.nodeType === 'SLOT' || el.classification === 'slot') {
+      if (instIcon) instIcon.visible = false;
+      if (textIcon) textIcon.visible = false;
+      if (slotIcon) slotIcon.visible = true;
     } else {
       if (instIcon) instIcon.visible = false;
       if (textIcon) textIcon.visible = false;
+      if (slotIcon) slotIcon.visible = false;
     }
   }
 
@@ -720,7 +746,8 @@ for (const el of elements) {
     const t = nameCell.findOne(n => n.type === 'TEXT');
     if (t) {
       const hiddenLabel = el.visible ? '' : ' (hidden)';
-      t.characters = el.name + hiddenLabel;
+      const countSuffix = el.count > 1 ? ' (x' + el.count + ')' : '';
+      t.characters = el.name + countSuffix + hiddenLabel;
     }
   }
 
@@ -737,11 +764,13 @@ return { success: true };
 
 ### Step 8b: Per-Sub-Component Child Sections
 
-For each direct child that is an `INSTANCE` node (has `mainComponentId` or `mainComponentSetId` in the extraction data) **or a slot-wrapper FRAME** (has `wrappedInstance` set during Step 4 reasoning), create a standalone anatomy section showing that child's internal structure. The script starts with the default variant but **falls back to the richest variant** (most direct children) when the default has 1 or fewer children and the component set has multiple variants. All hidden descendants are made visible.
+For each direct child that is an `INSTANCE` node (has `mainComponentId` or `mainComponentSetId` in the extraction data) **or an instance-wrapper FRAME** (has `wrappedInstance` set during Step 4 reasoning), create a standalone anatomy section showing that child's internal structure. The script starts with the default variant but **falls back to the richest variant** (most direct children) when the default has 1 or fewer children and the component set has multiple variants. All hidden descendants are made visible.
 
-Skip this step entirely if no child elements have `nodeType === 'INSTANCE'` and no slot-wrapper FRAMEs were identified in Step 4. Additionally, **check `shouldCreateSection`** on each eligible child (set during Step 4 reasoning) — skip the `figma_execute` call entirely for any child where `shouldCreateSection === false`. These are utility or trivially simple sub-components (Spacer, Divider, structural-only, etc.) that don't warrant a dedicated section. The `gcElements.length <= 1` guard in the JavaScript remains as a runtime safety net, but the agent should avoid even calling `figma_execute` for ineligible children.
+Skip this step entirely if no child elements have `nodeType === 'INSTANCE'` and no instance-wrapper FRAMEs were identified in Step 4. Additionally, **check `shouldCreateSection`** on each eligible child (set during Step 4 reasoning) — skip the `figma_execute` call entirely for any child where `shouldCreateSection === false`. These are utility or trivially simple sub-components (Spacer, Divider, structural-only, etc.) that don't warrant a dedicated section. The `gcElements.length <= 1` guard in the JavaScript remains as a runtime safety net, but the agent should avoid even calling `figma_execute` for ineligible children.
 
-For **each** eligible child element (`shouldCreateSection === true`), run via `figma_execute` (replace `__FRAME_ID__`, `__CHILD_NAME__`, `__CHILD_COMP_ID__`, `__CHILD_IS_COMP_SET__` with values from the extraction data). For direct INSTANCE children, use `mainComponentSetId` if `childIsComponentSet` is true, otherwise use `mainComponentId`. For **slot-wrapper FRAMEs**, use `wrappedInstance.mainComponentSetId` if `wrappedInstance.childIsComponentSet` is true, otherwise use `wrappedInstance.mainComponentId`. Replace `__CHILD_BOOLEAN_PROPS_JSON__` with the child sub-component's boolean properties (extracted from its `componentPropertyDefinitions` during Step 4 reasoning). If the child has no boolean properties, pass `[]`. Replace `__FONT_FAMILY__` with the `fontFamily` value from `uspecs.config.json` (default: `Inter`):
+**Deduplicate by component set:** When multiple composition elements reference the same `mainComponentSetId`, create only one child section for that component set. Use the first element's data for section creation. This is particularly common with composable slot components where the slot contains multiple instances of the same sub-component (e.g., 4 buttons in a button group).
+
+For **each** eligible child element (`shouldCreateSection === true`), run via `figma_execute` (replace `__FRAME_ID__`, `__CHILD_NAME__`, `__CHILD_COMP_ID__`, `__CHILD_IS_COMP_SET__` with values from the extraction data). For direct INSTANCE children, use `mainComponentSetId` if `childIsComponentSet` is true, otherwise use `mainComponentId`. For **instance-wrapper FRAMEs**, use `wrappedInstance.mainComponentSetId` if `wrappedInstance.childIsComponentSet` is true, otherwise use `wrappedInstance.mainComponentId`. Replace `__CHILD_BOOLEAN_PROPS_JSON__` with the child sub-component's boolean properties (extracted from its `componentPropertyDefinitions` during Step 4 reasoning). If the child has no boolean properties, pass `[]`. Replace `__FONT_FAMILY__` with the `fontFamily` value from `uspecs.config.json` (default: `Inter`):
 
 ```javascript
 const FRAME_ID = '__FRAME_ID__';
@@ -765,12 +794,15 @@ const textNodes = childSection.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
-    }
+  const len = tn.characters ? tn.characters.length : 0;
+  if (len > 0) {
+    try {
+      const fonts = tn.getRangeAllFontNames(0, len);
+      for (const f of fonts) {
+        const key = f.family + '|' + f.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+      }
+    } catch {}
   }
 }
 await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
@@ -824,6 +856,9 @@ directUnhide(compInstance);
 
 let grandchildContainer = compInstance;
 while (grandchildContainer.children.length === 1 && grandchildContainer.children[0].type === 'FRAME' && grandchildContainer.children[0].layoutMode !== 'NONE') {
+  grandchildContainer = grandchildContainer.children[0];
+}
+if (grandchildContainer.children.length === 1 && grandchildContainer.children[0].type === 'SLOT') {
   grandchildContainer = grandchildContainer.children[0];
 }
 
@@ -1096,15 +1131,23 @@ for (const el of gcElementsGrouped) {
   if (indicator) {
     const instIcon = indicator.findOne(n => n.name === '#instance');
     const textIcon = indicator.findOne(n => n.name === '#text');
+    const slotIcon = indicator.findOne(n => n.name === '#slot');
     if (el.nodeType === 'INSTANCE') {
       if (instIcon) instIcon.visible = true;
       if (textIcon) textIcon.visible = false;
+      if (slotIcon) slotIcon.visible = false;
     } else if (el.nodeType === 'TEXT') {
       if (instIcon) instIcon.visible = false;
       if (textIcon) textIcon.visible = true;
+      if (slotIcon) slotIcon.visible = false;
+    } else if (el.nodeType === 'SLOT') {
+      if (instIcon) instIcon.visible = false;
+      if (textIcon) textIcon.visible = false;
+      if (slotIcon) slotIcon.visible = true;
     } else {
       if (instIcon) instIcon.visible = false;
       if (textIcon) textIcon.visible = false;
+      if (slotIcon) slotIcon.visible = false;
     }
   }
 
@@ -1145,12 +1188,15 @@ const textNodes = annotationTable.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
-    }
+  const len = tn.characters ? tn.characters.length : 0;
+  if (len > 0) {
+    try {
+      const fonts = tn.getRangeAllFontNames(0, len);
+      for (const f of fonts) {
+        const key = f.family + '|' + f.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+      }
+    } catch {}
   }
 }
 await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
@@ -1170,9 +1216,9 @@ return { success: true };
 
 Replace `__CHILD_SECTION_ID__` with the returned `childSectionId` and `__ENRICHED_ELEMENTS_JSON__` with the enriched elements array (only `index` and `notes` fields are needed).
 
-Repeat for every eligible child element (`shouldCreateSection === true`) from the Step 3 extraction data — this includes both direct INSTANCE children and slot-wrapper FRAMEs with `wrappedInstance`. Skip any child where `shouldCreateSection === false` — do not call `figma_execute` for it.
+Repeat for every eligible child element (`shouldCreateSection === true`) from the Step 3 extraction data — this includes both direct INSTANCE children and instance-wrapper FRAMEs with `wrappedInstance`. Skip any child where `shouldCreateSection === false` — do not call `figma_execute` for it.
 
-After all per-child sections are processed, update the composition table's `#notes` cells: for each child (INSTANCE or slot-wrapper FRAME) that was **not** skipped (i.e., a section was created and `shouldCreateSection === true`), append ` — See <child name> anatomy section` to the existing notes text in the corresponding row. Do not add cross-references for skipped or ineligible children.
+After all per-child sections are processed, update the composition table's `#notes` cells: for each child (INSTANCE or instance-wrapper FRAME) that was **not** skipped (i.e., a section was created and `shouldCreateSection === true`), append ` — See <child name> anatomy section` to the existing notes text in the corresponding row. Do not add cross-references for skipped or ineligible children.
 
 ### Step 10: Visual Validation
 
@@ -1181,7 +1227,7 @@ After all per-child sections are processed, update the composition table's `#not
    - All sections (composition and per-child) have pink dashed outlines around each annotated element, correct markers, and 4-column table with type icons
    - Each sub-component with `shouldCreateSection: true` has its own section with artwork showing all elements visible
    - No sections were created for ineligible children (`shouldCreateSection: false`)
-   - Type indicators correctly show diamond for INSTANCE, T for TEXT, both hidden for FRAME/other
+   - Type indicators correctly show diamond for INSTANCE, T for TEXT, slot icon for SLOT, all three hidden for FRAME/container/structural
    - Hidden elements labeled "(hidden)" in element name column
    - Grouped elements show `(xN)` suffix in element name column
    - Notes column has brief functional descriptions; grouped elements mention their count
@@ -1195,20 +1241,22 @@ These notes document non-obvious behaviors, gotchas, and cross-step coordination
 
 - The target node can be either a `COMPONENT_SET` or a standalone `COMPONENT`. When standalone, it is treated as its own default variant — `createInstance()` is called directly on it, and there are no variant axes.
 - **Hidden children are included** in extraction because they represent toggleable boolean properties. They are made visible on the artwork instance so markers point to visible elements, but labeled "(hidden)" in the table.
-- **Wrapper traversal** (Step 3 + Step 8 + Step 8b): Scripts traverse through single-child auto-layout wrappers and a fallback for `[Background RECT, Content auto-layout FRAME]` patterns. This logic is duplicated in three places — extraction, composition artwork, and per-child artwork — and must stay in sync.
+- **Wrapper traversal** (Step 3 + Step 8 + Step 8b): Scripts traverse through single-child auto-layout wrappers, single-child SLOT wrappers, and a fallback for `[Background RECT, Content auto-layout FRAME]` patterns. This logic is duplicated in three places — extraction, composition artwork, and per-child artwork — and must stay in sync.
 - **Marker positioning**: Default mode places #1 left, evens above, odds below. Left-stagger mode (auto-detected when >50% of children share the same X center) places all markers left at staggered X positions. The mode decision uses the element's actual bbox, not the component container edge.
 - Step 7 **hides** the original `#anatomy-section` after cloning. This is critical — without it, placeholder text appears in screenshots. The property skill re-shows it if it needs additional clones.
-- **4-column table**: `#indicator` contains `#instance` (diamond) and `#text` (T) sub-frames — show one, hide the other. For FRAME/other types, hide both.
+- **4-column table with 3-type indicator**: `#indicator` contains `#instance` (diamond), `#text` (T), and `#slot` (slot icon) sub-frames — show one, hide the other two. For FRAME/container/structural types, hide all three.
 - **Property-aware unhide** (Step 8 + 8b): Boolean-controlled elements are toggled via `setProperties`, not blanket `recursiveUnhide`, to avoid showing mutually exclusive states simultaneously. In Step 8b, the child's own `componentPropertyDefinitions` booleans are toggled before a `directUnhide` pass catches remaining hidden elements.
 - **Index-based child matching** (Step 8): Bounding boxes are refreshed by array index (`childContainer.children[i]`), not by name. This avoids failures with duplicate element names.
 - **Marker visibility gotcha**: Step 8 sets `markerExample.visible = false` after composition markers. Step 8b clones from the same `#marker-example`, so each clone must explicitly set `dot.visible = true`.
 - **Simplified notes**: The anatomy skill produces semantic role-based descriptions only — no colors, tokens, typography, or dimensions. Those are handled by the dedicated color, structure, and API skills.
 - **Deep leaf resolution** (Step 8b): `resolveLeafElements` walks past wrapper FRAMEs (up to 4 levels) to annotate meaningful leaves. Single-child wrappers inherit the parent FRAME's name; multi-child wrappers extract each child separately.
-- **Deterministic classification** (Step 3): The extraction script classifies every element into a closed enum (`instance`, `instance-unwrapped`, `text`, `container`, `structural`) at extraction time. The AI does not reclassify — it validates and writes notes. This follows the principle: classify structurally at extraction time, not heuristically at consumption time.
-- **Slot-wrapper FRAME unwrapping** (Step 3): A FRAME/GROUP whose subtree resolves to exactly one INSTANCE descendant (through single-child wrapper nesting, via `walkToInnerInstance`) is classified as `instance-unwrapped` and unwrapped in the extraction script itself — `name` is replaced with the inner sub-component's `componentSetName`, `nodeType` is set to `'INSTANCE'`, and `originalName` preserves the FRAME name. The `wrappedInstance` field is retained so Step 8b can use `wrappedInstance.mainComponentSetId` / `wrappedInstance.mainComponentId` as `CHILD_COMP_ID`. The `bbox` stays unchanged so the marker points to the FRAME's visible area.
+- **SLOT node traversal** (Step 3 + Step 8 + Step 8b): Figma's SLOT type is used in composable components where child components are inserted via slots in code. The `childContainer` / `grandchildContainer` traversal walks through SLOT nodes the same way it walks through single-child auto-layout FRAMEs. A SLOT that appears as a direct child element is classified as `slot` and uses the `#slot` indicator in the table. When the SLOT is the only child of a variant (single-child wrapper pattern), it is traversed through to reach the actual content children.
+- **Deterministic classification** (Step 3): The extraction script classifies every element into a closed enum (`instance`, `instance-unwrapped`, `text`, `slot`, `container`, `structural`) at extraction time. The AI does not reclassify — it validates and writes notes. This follows the principle: classify structurally at extraction time, not heuristically at consumption time.
+- **Instance-wrapper FRAME unwrapping** (Step 3): A FRAME/GROUP whose subtree resolves to exactly one INSTANCE descendant (through single-child wrapper nesting, via `walkToInnerInstance`) is classified as `instance-unwrapped` and unwrapped in the extraction script itself — `name` is replaced with the inner sub-component's `componentSetName`, `nodeType` is set to `'INSTANCE'`, and `originalName` preserves the FRAME name. The `wrappedInstance` field is retained so Step 8b can use `wrappedInstance.mainComponentSetId` / `wrappedInstance.mainComponentId` as `CHILD_COMP_ID`. The `bbox` stays unchanged so the marker points to the FRAME's visible area.
 - **Boolean binding by index** (Step 3): Boolean properties are resolved to their controlling element by walking `variant.componentProperties`, extracting the node ID suffix, looking up the layer node, and matching it to elements by name (with `originalName` fallback for unwrapped elements). A name-matching fallback (`booleanProps[].name` vs `element.originalName || element.name`, case-insensitive) catches cases where node ID resolution fails. The result is `controlledByBoolean: { propName, rawKey, defaultValue }` on each bound element — no AI name-matching needed.
-- **Child section eligibility** (Step 3 → Step 8b): The extraction script sets `shouldCreateSection: true` on every `instance` and `instance-unwrapped` element, except those matching utility names (Spacer, Divider, etc.). The runtime `gcElementsGrouped.length <= 1` guard in Step 8b is the final safety net.
+- **Child section eligibility** (Step 3 → Step 8b): The extraction script sets `shouldCreateSection: true` on every `instance` and `instance-unwrapped` element, except those matching utility names (Spacer, Divider, etc.). All other classifications (`text`, `slot`, `container`, `structural`) default to `false`. The runtime `gcElementsGrouped.length <= 1` guard in Step 8b is the final safety net.
 - **Richest-variant fallback** (Step 8b): When a child component set's default variant has 1 or fewer direct children, the script iterates all variants and picks the one with the most direct children. This ensures variant-rich slot components get a meaningful anatomy section rather than being trivially skipped.
+- **Composition-level deduplication** (Step 4): When multiple composition elements are instances of the same component set (`mainComponentSetId`), they are collapsed into one representative element with a `count` field during Step 4 enrichment. This prevents redundant markers, outlines, and table rows for repeated identical children (e.g., 4 buttons in a button group). The representative uses `(xN)` suffix and a note explaining the pattern.
 - **Repeated sibling grouping** (Step 8b): Consecutive elements with the same `name`, `nodeType`, and `resolvedCompKey` (component set/component ID for INSTANCEs, element name for other types) are collapsed into one entry with a `count` field — one outline, one marker, one table row per group, with `(xN)` suffix in the name column.
 - **Cross-reference timing**: Cross-refs ("See X anatomy section") are NOT written during Step 4 note enrichment. They are appended to the composition table after all Step 8b sections are processed, once the agent knows which sections were actually created vs. skipped.
 - **Pink dashed outlines**: Both composition (Step 8) and per-child (Step 8b) sections draw dashed pink rectangles (`dashPattern = [4, 4]`, `MARKER_COLOR`) around each annotated element.

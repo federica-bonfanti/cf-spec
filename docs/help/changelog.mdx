@@ -3,6 +3,64 @@ title: "Changelog"
 description: "Product updates and release history"
 ---
 
+<Update label="V1.5.0 — March 2026" description="Composable slot support, blown-out rendering, and artwork label replacement">
+  ## uSpec V1.5.0
+
+  All seven skills now handle composable slot components (button groups, tab bars, chip groups) — with new SLOT node traversal, composition-level deduplication, blown-out child rendering, and realistic artwork labels.
+
+  ### Composable slot support across skills
+
+  - New `slot` classification type in the anatomy extraction script — SLOT nodes are detected, traversed, and annotated with a dedicated `#slot` indicator in the table
+  - Slot traversal added to all three wrapper-walking paths (extraction, composition artwork, per-child artwork) so components using Figma's composable slot pattern are handled consistently
+  - Voice/screen reader extraction recurses into slot containers with identically-named children, assigning `slotIndex` for index-based matching across focus stop resolution
+
+  ### Composition-level deduplication
+
+  - Multiple instances of the same sub-component (e.g., 4 buttons in a button group) are collapsed into a single representative element with an `(xN)` suffix at the composition level
+  - Prevents redundant markers, outlines, and table rows — one entry per unique sub-component, with a note explaining the repeated pattern
+  - Per-child sections are also deduplicated by `mainComponentSetId` so only one anatomy section is created per unique sub-component
+
+  ### Blown-out child rendering (property skill)
+
+  - New rendering mode creates instances directly from a child's component set instead of modifying nested instances in a parent — immune to sparse variant matrices and nested-instance property access issues
+  - Automatic fallback: when `setProperties()` fails on a nested instance, the chapter is re-rendered in blown-out mode
+  - Sparse variant matrix detection added to AI validation — identifies missing axis combinations and adds `constrainedBy` metadata for correct base variant selection
+  - Coupled axis detection improved with heuristics for semantically coupled axes where option names differ
+
+  ### Artwork label replacement (voice skill)
+
+  - Artwork previews now replace generic "Label" placeholder text with realistic, state-specific labels (e.g., "Day", "Week", "Month", "Year")
+  - Labels are passed per-state via `artworkLabels` and applied by detaching the instance and its nested sub-instances before modifying text nodes
+  - Focus stop outlines (pink dashed rectangles) added to voice artwork for visual consistency with the anatomy skill
+
+  ### Color token resolution improvements
+
+  - Token resolution now prefers `codeSyntax.WEB` over raw variable names, producing cleaner developer-ready token references
+  - Paint style fallback added for fills, strokes, and effects — when no variable binding exists but a Figma paint style is applied, the style name is used as the token
+  - Container/slot component detection: when the parent has no direct color entries, extraction re-targets to the sub-component automatically
+  - Mode token maps updated to use web code syntax
+
+  ### API child overrides for slot components
+
+  - Configuration examples now support `childOverrides` — per-child property overrides applied to composable slot children by index
+  - Item-level properties (e.g., `item 1 isSelected`) can be documented in example tables to reflect the preview state
+
+  ### Figma MCP compatibility (property skill)
+
+  - Added method restriction table and replacement helpers (`findByName`, `findAllText`, font-loading via `tn.fontName`) for `figma-mcp` where `findAll`, `findOne`, and `getRangeAllFontNames` throw `TypeError`
+  - Page-loading block updated to use explicit page name lookup instead of parent traversal
+
+  ### User-provided design context
+
+  - Anatomy and property skills now integrate user-provided notes (behavioral descriptions, usage constraints, coupling hints) into semantic notes and validation logic
+  - Voice skill documents behavioral states from user context (e.g., single-select vs. multi-select) as separate entries when they produce different semantic properties
+
+  ### Robustness
+
+  - Font loading wrapped in try/catch across all rendering scripts to prevent crashes on mixed-font or empty text nodes
+  - Instance-wrapper terminology standardized from "slot-wrapper" to "instance-wrapper" across all skills and instruction files
+</Update>
+
 <Update label="V1.4.1 — March 2026" description="Dual MCP support across all documentation">
   ## uSpec V1.4.1
 

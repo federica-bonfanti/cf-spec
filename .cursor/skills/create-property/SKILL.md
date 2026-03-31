@@ -16,7 +16,7 @@ Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for ever
 | Verify connection | `figma_get_status` | Skip — implicit. If first `use_figma` call fails, guide user to check MCP setup. |
 | Navigate to file | `figma_navigate` with URL | Extract `fileKey` from URL (`figma.com/design/:fileKey/...`). No navigate needed. |
 | Take screenshot | `figma_take_screenshot` | `get_screenshot` with `fileKey` + `nodeId` |
-| Execute Plugin JS | `figma_execute` with `code` | `use_figma` with `fileKey`, `code`, `description`. **JS code is identical** — no wrapper changes. |
+| Execute Plugin JS | `figma_execute` with `code` | `use_figma` with `fileKey`, `code`, `description`. **Core logic is identical** but some node methods must be replaced — see method restrictions below. |
 | Search components | `figma_search_components` | `search_design_system` with `query` + `fileKey` + `includeComponents: true` |
 | Get file/component data | `figma_get_file_data` / `figma_get_component` | `get_metadata` or `get_design_context` with `fileKey` + `nodeId` |
 | Get variables (file-wide) | `figma_get_variables` | `use_figma` script: `return await figma.variables.getLocalVariableCollectionsAsync();` |
@@ -26,14 +26,63 @@ Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for ever
 
 **`figma-mcp` requires `fileKey` on every call.** Extract it once from the user's Figma URL at the start of the workflow. For branch URLs (`figma.com/design/:fileKey/branch/:branchKey/:fileName`), use `:branchKey` as the fileKey.
 
-**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, descendant nodes (text, instances) may not be fully loaded — methods like `getRangeAllFontNames`, `findAll`, or `characters` can fail with `TypeError`. Insert this page-loading block immediately after `getNodeByIdAsync`:
+**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, descendant nodes (text, instances) may not be fully loaded. Insert this page-loading block at the **start** of every script that references a previously-created node:
 
 ```javascript
-let _p = node; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
-if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
+const pages = figma.root.children;
+const targetPage = pages.find(p => p.name === '__PAGE_NAME__');
+if (targetPage) await figma.setCurrentPageAsync(targetPage);
 ```
 
-This walks up to the PAGE ancestor and loads its content. Console MCP does not need this — `figma_execute` inherits the Desktop page context.
+Replace `__PAGE_NAME__` with the actual page name (determined during Step 5 when the template is placed). This loads the page content so child nodes are accessible.
+
+**`figma-mcp` method restrictions:** Even after page loading, the following methods consistently throw `TypeError` in `figma-mcp` and must **not** be used. The script templates in Steps 6–7 use `figma-console` syntax (`findAll`, `findOne`, `getRangeAllFontNames`). When using `figma-mcp`, replace them with these helpers:
+
+| Broken method | Replacement |
+|---|---|
+| `node.findAll(fn)` | Use recursive `findAllText(node, [])` for text nodes, or a custom recursive walker for other predicates (see helpers below) |
+| `node.findOne(fn)` | Use recursive `findByName(node, name)` helper (below) |
+| `tn.getRangeAllFontNames(0, len)` | Use `tn.fontName` (returns `{ family, style }` for single-font text; wrap in try/catch for mixed-font text) |
+
+Include these two helpers at the top of every `figma-mcp` rendering script:
+
+```javascript
+function findByName(node, name) {
+  if (node.name === name) return node;
+  if ('children' in node) {
+    for (const child of node.children) {
+      const found = findByName(child, name);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function findAllText(node, results) {
+  if (node.type === 'TEXT') results.push(node);
+  if ('children' in node) {
+    for (const child of node.children) findAllText(child, results);
+  }
+  return results;
+}
+```
+
+And replace the font-loading block in every script from:
+```javascript
+const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
+```
+to:
+```javascript
+try {
+  const fn = tn.fontName;
+  if (fn && typeof fn === 'object' && fn.family) {
+    const key = fn.family + '|' + fn.style;
+    if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+  }
+} catch {}
+```
+
+Console MCP does not need these replacements — `figma_execute` inherits the Desktop page context where `findAll`, `findOne`, and `getRangeAllFontNames` work natively.
 
 ## Inputs Expected
 
@@ -637,6 +686,15 @@ After all deterministic extraction is complete (Steps 3, 3a, 3b, 3c, 3d), perfor
 
 Review the following and make corrections to the data structures before proceeding to Step 4:
 
+#### Integrate user-provided notes
+
+If the user provided contextual notes (e.g., "composable slot in code", "single select and multi select behavior", "do not mix variants"), map each note to a specific data action:
+
+- **Coupling hints** (e.g., "variant controls the sub-component variant") → Override the deterministic coupled-axis result from 3d-i. Mark the child axis as `coupled: true` even if the option names don't match.
+- **Usage constraints** (e.g., "do not mix different sizes") → Attach as description text to the relevant chapter. No data structure change needed.
+- **Code-only properties** (e.g., "single select / multi select behavior") → Note in a relevant chapter description. These cannot be visualized but should be documented.
+- **Property importance hints** (e.g., "see isSelected boolean") → Ensure that property gets its own chapter and is not accidentally skipped by normalization.
+
 #### Cross-check boolean linkage
 
 For each child component where `controllingBooleanName` is `null` and `visible === false`, check whether any parent boolean name is semantically related to the child's layer name. The deterministic script in 3c uses exact name matching and normalized substring containment, but some designs use unrelated naming conventions (e.g., boolean "Show actions" controlling a child named "toolbar"). If a semantic match is apparent, manually set `controllingBooleanName` and `controllingBooleanRawKey` on the child entry and add the boolean name to `controllingBooleanNames`.
@@ -650,6 +708,34 @@ Review the `variableModeProps` from Step 3b. For each collection:
 - Confirm it applies to this component specifically, not a different component or a global theme. A "Density" collection that only has bindings to unrelated components should be excluded.
 - Confirm the mode names represent meaningful property options (e.g., "Compact", "Default", "Spacious"), not color themes or breakpoints.
 - Remove any entries that are not relevant to this component's configurable properties.
+
+#### Cross-check coupled axis detection
+
+The deterministic check in 3d-i only flags a child axis as coupled when its options are a **strict subset** of the parent's options (case-insensitive). This misses semantically coupled axes where the option names differ. Common pattern: a parent axis named `variant` with options `[bold, subtle]` and a child axis also named `variant` with options `[primary, subtle]` — the parent controls the child's variant, but "bold" ≠ "primary" so the subset check fails.
+
+Apply these heuristics for axes that share the same name (case-insensitive) but failed the subset check:
+
+- **Same option count** + **partial option overlap** (≥50% of options match) → Likely coupled. Mark as `coupled: true`.
+- **User notes explicitly state coupling** (e.g., "variant is a prebuild option for primary and subtle") → Override to `coupled: true` regardless of option overlap.
+- **Different option count with no overlap** → Probably not coupled. Leave as `coupled: false`.
+
+When overriding to `coupled: true`, the parent axis chapter already covers this property visually — the child axis chapter would be redundant.
+
+#### Detect sparse variant matrices in child components
+
+Sub-component sets may not define all variant axis combinations. For example, a child with axes `isDisabled: [false, true]` and `isSelected: [true, false]` might lack the `isDisabled=true, isSelected=false` variant. When the in-context rendering approach (6e) calls `setProperties()` on a nested instance with a missing combination, it throws `"Unable to find a variant with those property values"` and the chapter silently fails or rolls back.
+
+For each child component, check whether all axis value combinations exist:
+
+- If any child axis has options that only exist in combination with specific values of another axis (e.g., `isDisabled=true` only exists when `isSelected=true`), add a `constrainedBy` property to that axis entry in the child's `variantAxes` array (e.g., `constrainedBy: { isSelected: 'true' }`). This field is added during AI validation, not by the deterministic scripts.
+- Pass this constraint to the rendering step so the correct base variant is used (6e-iii reads `constrainedBy` from the axis to populate `BASE_PROPS`).
+- If the constraint makes in-context rendering infeasible (e.g., multiple interdependent constraints), flag the child for **blown-out rendering** by adding `blownOut: true` to the child entry in `childComponents`. See 6e-iii for the rendering template.
+
+This check can be done by inspecting the `variantProperties` of all children in the sub-component set (via a `use_figma` script on `mainComponentSetId`) or by attempting a test `setProperties()` call and catching the error.
+
+#### Deduplicate identical child instances
+
+The Step 3c script walks all children and may return multiple entries pointing to the same `mainComponentSetId` (e.g., 4 button instances in a button group that all resolve to the same Button component set). Before rendering, deduplicate `childComponents` by `mainComponentSetId` (or `mainComponentId` for non-set children). Keep only the first occurrence. This prevents rendering 4 identical chapters for the same sub-component. When deduplication removes entries, flag the surviving entry with `blownOut: true` — in-context rendering would only modify one of the identical nested instances, making the other copies visually inconsistent.
 
 #### Catch structural anomalies
 
@@ -1113,9 +1199,20 @@ return { success: true, property: PROPERTY_NAME };
 }
 ```
 
-#### 6e: For each CHILD COMPONENT (in-context rendering)
+#### 6e: For each CHILD COMPONENT
 
-If `childComponents` from Step 3c is not empty, render chapters for each child component. All previews are created as **parent component instances** with the child's property varied on the nested instance — never as isolated child instances.
+If `childComponents` from Step 3c is not empty, render chapters for each child component.
+
+**Rendering mode selection:** The preferred approach is **in-context rendering** — creating parent component instances with the child's property varied on the nested instance. This shows the child property in the context of the full parent component, which matches the designer's experience.
+
+However, use **blown-out rendering** (isolated sub-component instances created directly from the child's component set) when any of these conditions apply:
+
+- The child was flagged for blown-out rendering in Step 3e (sparse variant matrix, interdependent constraints)
+- `setProperties()` on a nested instance fails at runtime (fallback — catch the error, remove the broken chapter, and re-render blown-out)
+- Multiple identical child instances exist in the parent (e.g., 4 buttons in a button group) — deduplicate to one blown-out child entry
+- The user explicitly requests blown-out views
+
+When blown-out rendering is used, create instances directly from the child's `mainComponentSetId` component set using `findVariant()` to locate the exact variant, rather than modifying nested instances. See **6e-iii** for the blown-out script template.
 
 **Important**: Run **one `figma_execute` call per child component** (covering its variant axes chapter). If the child also has boolean properties, run a second call for the boolean chapters. This prevents timeouts.
 
@@ -1418,9 +1515,67 @@ return { success: true, childComponent: CHILD_NAME };
 
 Replace `__COMP_SET_NODE_ID__` with the **parent** component's `compSetNodeId`, not the child's. Set `__CONTROLLING_BOOL_RAW_KEY_OR_NULL__` to the quoted raw key string or `null`.
 
+##### 6e-iii: Blown-out child rendering (direct sub-component instances)
+
+When blown-out rendering is selected (per the conditions in 6e), create instances directly from the child's component set rather than modifying nested instances in a parent. This approach is immune to sparse variant matrices and nested-instance property access issues.
+
+For each child variant axis (non-coupled), run via `figma_execute`. Replace `__SUB_COMP_SET_ID__` with the child's `mainComponentSetId`:
+
+```javascript
+const FRAME_ID = '__FRAME_ID__';
+const SUB_COMP_SET_ID = '__SUB_COMP_SET_ID__';
+const CHAPTER_NAME = '__CHAPTER_NAME__';
+const AXIS_NAME = '__AXIS_NAME__';
+const OPTIONS = __OPTIONS_JSON__;
+const DEFAULT_VALUE = '__DEFAULT_VALUE__';
+const BASE_PROPS = __BASE_PROPS_JSON__;
+const DESCRIPTION = '__DESCRIPTION__';
+const FONT_FAMILY = '__FONT_FAMILY__';
+
+// ... page-loading block + findByName/findAllText helpers (see MCP Adapter) ...
+
+const frame = await figma.getNodeByIdAsync(FRAME_ID);
+const subCompSet = await figma.getNodeByIdAsync(SUB_COMP_SET_ID);
+
+function findVariant(compSet, targetProps) {
+  let best = null;
+  let bestScore = -1;
+  for (const child of compSet.children) {
+    const vp = child.variantProperties || {};
+    let score = 0;
+    let exact = true;
+    for (const [k, v] of Object.entries(targetProps)) {
+      if (vp[k] === v) score++;
+      else exact = false;
+    }
+    if (exact) return child;
+    if (score > bestScore) { bestScore = score; best = child; }
+  }
+  return best;
+}
+
+// ... clone #anatomy-section, set section name/description, clear #preview (same pattern as 6a) ...
+
+for (const option of OPTIONS) {
+  const targetProps = { ...BASE_PROPS };
+  targetProps[AXIS_NAME] = option;
+
+  const variant = findVariant(subCompSet, targetProps);
+  // ... create wrapper, create instance from variant, add label (same pattern as 6a) ...
+}
+```
+
+`BASE_PROPS` should contain the default values for all OTHER variant axes of the sub-component (e.g., `{ layout: 'icon+label', size: 'medium', variant: 'primary', isDisabled: 'false', isSelected: 'true' }`). When a `constrainedBy` note exists from 3e (e.g., `isDisabled` requires `isSelected=true`), incorporate that constraint into `BASE_PROPS`.
+
+For child **boolean** properties in blown-out mode, create an instance from the sub-component's default variant and call `inst.setProperties({ [rawKey]: boolValue })` directly on the instance (not nested). Boolean `setProperties` on a direct instance is reliable since it doesn't change the variant combination.
+
+For **sibling boolean** combinatorial chapters in blown-out mode, follow the same pattern: create a direct instance and call `setProperties()` with the boolean raw keys for each combination.
+
 ##### 6f: Unified slot chapters (combinatorial previews)
 
 If `unifiedSlotChapters` from Step 3d-iii is not empty, render one chapter per entry. Each chapter shows the meaningful combinations of the container boolean + its sub-booleans as a single visual exhibit.
+
+**Blown-out adaptation**: If the child referenced by a unified slot chapter has `blownOut: true`, replace the in-context rendering pattern (parent instance + `findNestedChild` + `setProperties` on nested instance) with the blown-out pattern from 6e-iii: create instances directly from the child's `mainComponentSetId` and call `setProperties()` for the boolean combinations on the direct instance. The container boolean on/off toggle is still meaningful — for the "None" state, simply omit the instance (or show a placeholder text "Hidden").
 
 For each unified slot chapter, run via `figma_execute`:
 
@@ -1555,6 +1710,8 @@ Replace `__COMP_SET_NODE_ID__` with the **parent** component's `compSetNodeId`. 
 ##### 6g: Sibling boolean combinatorial chapters
 
 If `siblingBoolChapters` from Step 3d-iv is not empty, render one chapter per entry. Each chapter shows the meaningful combinations of sibling booleans on the same child component as a single visual exhibit.
+
+**Blown-out adaptation**: If the child has `blownOut: true`, use the blown-out pattern from 6e-iii: create instances directly from the child's `mainComponentSetId` and call `setProperties()` with the boolean combinations on the direct instance (no parent wrapper, no `findNestedChild`).
 
 For each sibling boolean chapter, run via `figma_execute`:
 
@@ -1691,8 +1848,8 @@ return { success: true };
    - Each variant axis has a section with instance previews for every option
    - Each boolean has a section showing on/off states (excluding controlling booleans merged into child chapters, and sibling booleans collapsed into combinatorial chapters)
    - Each variable mode property has a section with visual instance previews per mode
-   - Each child component chapter shows **parent instances** (not isolated sub-components) with the child property varied
-   - Child chapters with a controlling boolean include an "off" state labeled "No {booleanName}" as the first preview
+   - Each child component chapter shows the child property varied — either as in-context parent instances or as blown-out sub-component instances (see 6e for mode selection criteria). Verify the chosen mode matches the conditions.
+   - Child chapters with a controlling boolean include an "off" state labeled "No {booleanName}" as the first preview (in-context mode only)
    - Labels indicate defaults
    - Component instances render correctly
    - Child component chapter titles use the `controllingBooleanName` (e.g., "Trailing content") rather than the raw layer name (e.g., "trailingContent v2") when a controlling boolean exists. If a title shows an internal layer name (camelCase, version suffixes like "v2"), rename the chapter and its `#section-name` text to use the controlling boolean name instead.
@@ -1714,11 +1871,12 @@ return { success: true };
 - **Baked-in variable modes**: Some components have explicit variable modes set directly on their root or internal sub-instances. Instances created from such components inherit these baked-in modes, which override the wrapper frame's mode. The 6c script calls `clearExplicitVariableModeForCollection(collection)` recursively on each instance after creation so it inherits the mode from the wrapper instead.
 - **Sub-component discovery** (Step 3c): The extraction script walks the default variant's children recursively. For each `INSTANCE` child, it resolves the main component via `getMainComponentAsync()`. If the main component belongs to a local `COMPONENT_SET` or is a standalone `COMPONENT` with its own `componentPropertyDefinitions` (variant axes, booleans, instance swaps), those properties are extracted into the `childComponents` array. Child components with no configurable properties are skipped.
 - **Controlling boolean linkage** (Step 3c): The `figma_execute` script resolves boolean-to-child linkage deterministically within the script itself (no AI reasoning needed). For each hidden child (`visible === false`), it iterates the parent's `booleanProps` (passed as input) and uses two deterministic checks: (1) primary — resolve `rawKey#nodeId` suffix to a layer and compare its name to the child's layer name, (2) fallback — normalize both names (lowercase, strip non-alphanumeric) and check substring containment. The script returns `controllingBooleanName`, `controllingBooleanRawKey` on each child entry, plus a `controllingBooleanNames` array for the skip set used in 6b.
-- **In-context rendering** (6e): All child component properties are rendered on **parent instances**, never as isolated sub-component instances. For each preview, the skill creates a parent instance via `parentDefaultVariant.createInstance()`, toggles the controlling boolean if applicable, then finds the nested child instance by layer name and calls `setProperties()` to swap the variant or toggle the boolean. This ensures previews show the child property in the context of the full parent component, which is what designers see when configuring the component.
+- **In-context rendering** (6e): The preferred approach renders child component properties on **parent instances**. For each preview, the skill creates a parent instance via `parentDefaultVariant.createInstance()`, toggles the controlling boolean if applicable, then finds the nested child instance by layer name and calls `setProperties()` to swap the variant or toggle the boolean. This ensures previews show the child property in the context of the full parent component, which is what designers see when configuring the component. However, when in-context rendering fails (sparse variant matrix, nested instance access errors, duplicate child instances, or user preference), **blown-out rendering** (6e-iii) creates instances directly from the child's component set instead. Both approaches are valid — see the mode selection criteria in 6e.
+- **Sparse variant matrices**: Sub-component sets often do not define all possible variant axis combinations. For example, a child with `isDisabled: [false, true]` and `isSelected: [true, false]` may lack the `isDisabled=true, isSelected=false` variant. When `setProperties()` is called with a missing combination on a nested instance, it throws `"Unable to find a variant with those property values"`. Step 3e should detect this proactively. At rendering time, the agent should either use a constrained base variant (e.g., set `isSelected=true` before setting `isDisabled=true`) or switch to blown-out rendering where the exact variant is selected directly via `findVariant()`.
 - **Off-state label convention**: When a child has a controlling boolean, the first preview in the chapter shows the "off" state (boolean = false) labeled `"No {controllingBooleanName}"` (e.g., "No trailing content"). This negated phrasing clearly communicates that the child is hidden. The off state is marked as `(default)` when the controlling boolean's default value is `false`.
-- **Child component exhibits** (6e): Each child component with variant axes gets a chapter per axis, and each with booleans gets a chapter per boolean toggle. Instances are created from the **parent** component (not the child directly). Chapter titles use the format "{childLayerName} – {propertyName}" and descriptions note "Sub-component: {mainComponentName}" for context. The same rollback-on-failure pattern (try/catch with chapter removal) applies.
+- **Child component exhibits** (6e): Each child component with variant axes gets a chapter per axis, and each with booleans gets a chapter per boolean toggle. In **in-context mode**, instances are created from the parent component with the nested child's property varied. In **blown-out mode**, instances are created directly from the child's component set. Chapter titles use the format "{childLayerName} – {propertyName}" and descriptions note "Sub-component: {mainComponentName}" for context. The same rollback-on-failure pattern (try/catch with chapter removal) applies. When the parent contains multiple identical child instances of the same component set (e.g., 4 buttons in a button group), deduplicate to a single child entry before rendering.
 - **Property normalization** (Step 3d): Before rendering, a deterministic `figma_execute` script processes the extracted property data to eliminate redundant or misleading chapters. No AI reasoning is needed — the script takes `parentVariantAxes`, `childComponents`, and `controllingBooleanNames` as inputs and returns the full normalization plan. Four issues are addressed: (1) child variant axes that mirror the parent (coupled axes) are flagged with `coupled: true` and skipped in rendering, (2) sub-booleans nested inside container-gated children are identified as candidates for unification, (3) container booleans + their sub-booleans are collapsed into `unifiedSlotChapters` with combinatorial previews, and (4) sibling booleans on the same child are collapsed into `siblingBoolChapters` with combinatorial previews.
-- **Coupled axis detection** (3d-i): A child variant axis is coupled when it shares the same name (case-insensitive) with a parent axis and its options are a subset of (or equal to) the parent's options. For example, a child "Label" with `Size: [Large, Medium, Small]` matching the parent's `Size: [Large, Medium, Small, XSmall]` is coupled — the child size always follows the parent, so showing it separately is redundant.
+- **Coupled axis detection** (3d-i + 3e): The deterministic check in 3d-i flags a child variant axis as coupled when it shares the same name (case-insensitive) with a parent axis and its options are a subset of (or equal to) the parent's options. For example, a child "Label" with `Size: [Large, Medium, Small]` matching the parent's `Size: [Large, Medium, Small, XSmall]` is coupled — the child size always follows the parent, so showing it separately is redundant. **Known limitation**: This misses semantically coupled axes where option names differ (e.g., parent `variant: [bold, subtle]` controlling child `variant: [primary, subtle]`). The AI validation in Step 3e applies heuristics (same name + partial option overlap, or user-provided coupling hints) to catch these cases.
 - **Unified slot chapter labeling** (3d-iii / 6f): Combination labels are derived by stripping the common prefix from sub-boolean names. For a container "Leading content" with sub-booleans "Leading artwork" and "Leading text", the labels become: None / Text only / Artwork only / Text + Artwork. When there is only 1 sub-boolean, the labels are: None / {short name}. The "None" state represents the container boolean in its off position.
 - **Combination cap** (3d-iii): For containers with 3+ sub-booleans, the full power set may be too large. Limit unified slot chapters to ~6 meaningful combinations, omitting edge cases. Focus on the most common designer workflows (all off, each on individually, all on) and skip unlikely combinations.
 - **Sibling boolean collapsing** (3d-iv / 6g): When a child component has 2+ boolean properties that are not consumed by container-gating (3d-ii/iii), they are collapsed into a single combinatorial chapter. For example, a Label child with "Show icon" (default: false) and "Character count" (default: true) becomes a single "Label" chapter with 4 previews: None, Character count (default), Icon, Character count + Icon. The default label is computed from the actual boolean defaults. Short names are derived by stripping common prefixes/verbs (e.g., "Show icon" → "Icon"). If only 1 boolean remains after filtering, it is rendered as a standard boolean chapter (6e-ii) instead.

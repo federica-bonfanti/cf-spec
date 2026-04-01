@@ -3,6 +3,36 @@ title: "Changelog"
 description: "Product updates and release history"
 ---
 
+<Update label="V1.6.1 — April 2026" description="Improved component anatomy and voice reader annotation">
+  ## uSpec V1.6.1
+
+  Anatomy and voice reader artwork rendering are now more robust — both skills use a dedicated wrapper frame for absolute positioning and voice gains dynamic preview sizing with smarter marker placement.
+
+  ### Wrapper frame for artwork (Anatomy)
+
+  - Artwork elements (component instance, outlines, markers, lines) are now placed inside a dedicated inner wrapper frame instead of directly on the preview placeholder
+  - The wrapper uses `layoutMode = 'NONE'` with transparent fills and `clipsContent = true`, keeping absolute positioning isolated from the template's auto-layout
+  - Applied to both composition-level and per-child artwork scripts
+
+  ### Dynamic preview sizing (Voice)
+
+  - Preview dimensions are now calculated from the live instance's `width`/`height` plus marker margins, replacing the stale `ROOT_SIZE` parameter
+  - Eliminates centering drift when variant switching changes the component's rendered size
+  - Sizing formula accounts for the number of focus stops so left-stagger markers never run out of room
+  - Removed the `ROOT_SIZE` placeholder from the rendering template and instruction file
+
+  ### Marker positioning strategies (Voice)
+
+  - Voice artwork now uses the same three-strategy marker placement as anatomy: **clockwise**, **left stagger**, and **alternating**
+  - Strategy is auto-detected by clustering focus stop centers — consistent with anatomy's approach
+  - Replaces the previous simple alternating-only placement, producing cleaner annotations for concentric and vertically stacked components
+
+  ### Pre-detach bounding box capture (Voice)
+
+  - Bounding boxes for focus stops are now captured from the live instance before any `detachInstance()` call
+  - Avoids fragility of post-detach name matching where SLOT nodes reorganize and `findStopNode` may fail
+</Update>
+
 <Update label="V1.6.0 — April 2026" description="Synthetic layer detection, clockwise markers, measurement annotation pause, and two-layer architecture">
   ## uSpec V1.6.0
 

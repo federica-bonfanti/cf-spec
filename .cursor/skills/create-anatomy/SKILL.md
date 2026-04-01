@@ -573,18 +573,18 @@ const neededH = rootH + 2 * (MARKER_SIZE + MARKER_OFFSET + PADDING);
 const ARTWORK_W = Math.max(MIN_W, Math.round(neededW));
 const ARTWORK_H = Math.max(MIN_H, Math.round(neededH));
 
-preview.layoutMode = 'NONE';
-preview.resize(ARTWORK_W, ARTWORK_H);
-preview.paddingTop = 0;
-preview.paddingBottom = 0;
-preview.paddingLeft = 0;
-preview.paddingRight = 0;
-preview.clipsContent = true;
+const wrapper = figma.createFrame();
+wrapper.name = 'Artwork wrapper';
+wrapper.layoutMode = 'NONE';
+wrapper.resize(ARTWORK_W, ARTWORK_H);
+wrapper.clipsContent = true;
+wrapper.fills = [];
+preview.appendChild(wrapper);
 
 const compX = Math.round((ARTWORK_W - rootW) / 2);
 const compY = Math.round((ARTWORK_H - rootH) / 2);
 
-preview.appendChild(compInstance);
+wrapper.appendChild(compInstance);
 compInstance.x = compX;
 compInstance.y = compY;
 
@@ -680,7 +680,7 @@ const CLOCKWISE_SIDES = ['left', 'top', 'right', 'bottom'];
 
 for (const el of elements) {
   const outline = figma.createRectangle();
-  preview.appendChild(outline);
+  wrapper.appendChild(outline);
   outline.name = 'Outline ' + el.index;
   outline.x = Math.round(compX + el.bbox.x);
   outline.y = Math.round(compY + el.bbox.y);
@@ -700,7 +700,7 @@ for (const el of elements) {
   const elRightX = compX + el.bbox.x + el.bbox.w;
 
   const dot = markerExample.clone();
-  preview.appendChild(dot);
+  wrapper.appendChild(dot);
   dot.name = 'Marker ' + el.index;
   dot.visible = true;
   const numText = dot.findOne(n => n.type === 'TEXT');
@@ -761,7 +761,7 @@ for (const el of elements) {
   dot.y = Math.round(dotY);
 
   const line = figma.createRectangle();
-  preview.appendChild(line);
+  wrapper.appendChild(line);
   line.name = 'Line ' + el.index;
   line.fills = [{ type: 'SOLID', color: MARKER_COLOR }];
 
@@ -1056,18 +1056,18 @@ const neededH = rootH + 2 * (MARKER_SIZE + MARKER_OFFSET + PADDING);
 const ARTWORK_W = Math.max(MIN_W, Math.round(neededW));
 const ARTWORK_H = Math.max(MIN_H, Math.round(neededH));
 
-preview.layoutMode = 'NONE';
-preview.resize(ARTWORK_W, ARTWORK_H);
-preview.paddingTop = 0;
-preview.paddingBottom = 0;
-preview.paddingLeft = 0;
-preview.paddingRight = 0;
-preview.clipsContent = true;
+const wrapper = figma.createFrame();
+wrapper.name = 'Artwork wrapper';
+wrapper.layoutMode = 'NONE';
+wrapper.resize(ARTWORK_W, ARTWORK_H);
+wrapper.clipsContent = true;
+wrapper.fills = [];
+preview.appendChild(wrapper);
 
 const compX = Math.round((ARTWORK_W - rootW) / 2);
 const compY = Math.round((ARTWORK_H - rootH) / 2);
 
-preview.appendChild(compInstance);
+wrapper.appendChild(compInstance);
 compInstance.x = compX;
 compInstance.y = compY;
 
@@ -1118,7 +1118,7 @@ const CLOCKWISE_SIDES = ['left', 'top', 'right', 'bottom'];
 
 for (const el of gcElementsGrouped) {
   const outline = figma.createRectangle();
-  preview.appendChild(outline);
+  wrapper.appendChild(outline);
   outline.name = 'Outline ' + el.index;
   outline.x = Math.round(compX + el.bbox.x);
   outline.y = Math.round(compY + el.bbox.y);
@@ -1138,7 +1138,7 @@ for (const el of gcElementsGrouped) {
   const elRightX = compX + el.bbox.x + el.bbox.w;
 
   const dot = markerExample.clone();
-  preview.appendChild(dot);
+  wrapper.appendChild(dot);
   dot.visible = true;
   dot.name = 'Marker ' + el.index;
   const numText = dot.findOne(n => n.type === 'TEXT');
@@ -1199,7 +1199,7 @@ for (const el of gcElementsGrouped) {
   dot.y = Math.round(dotY);
 
   const line = figma.createRectangle();
-  preview.appendChild(line);
+  wrapper.appendChild(line);
   line.name = 'Line ' + el.index;
   line.fills = [{ type: 'SOLID', color: MARKER_COLOR }];
 

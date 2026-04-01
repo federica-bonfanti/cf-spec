@@ -329,7 +329,6 @@ const HAS_DESCRIPTION = __HAS_DESCRIPTION__;
 const SECTIONS = __SECTIONS_JSON__;
 const RENDER_ARTWORK = __RENDER_ARTWORK__;
 const COMP_SET_ID = '__COMP_SET_NODE_ID__';
-const ROOT_SIZE = __ROOT_SIZE_JSON__;
 const FOCUS_STOPS = __FOCUS_STOPS_JSON__;
 const VARIANT_PROPS = __VARIANT_PROPS_JSON__;
 const BOOLEAN_DEFS = __BOOLEAN_DEFS_JSON__;
@@ -450,15 +449,16 @@ sectionTemplate.remove();
 // --- Focus order artwork ---
 if (RENDER_ARTWORK && FOCUS_STOPS.length >= 1) {
   const MARKER_COLOR = { r: 0.922, g: 0, b: 0.431 };
+  const MARKER_SIZE = 33;
+  const MARKER_OFFSET = 40;
+  const LINE_WIDTH = 1;
+  const PADDING = 80;
+  const MIN_W = 1400;
+  const MIN_H = 290;
+  const STAGGER_STEP = MARKER_SIZE + 12;
 
   const previewPlaceholder = stateClone.findOne(n => n.name === 'Preview placeholder');
   if (previewPlaceholder) {
-    previewPlaceholder.layoutMode = 'NONE';
-    previewPlaceholder.clipsContent = true;
-
-    const PW = previewPlaceholder.width;
-    const PH = previewPlaceholder.height;
-
     const compNode = await figma.getNodeByIdAsync(COMP_SET_ID);
     const defaultVariant = compNode.type === 'COMPONENT_SET'
       ? (compNode.defaultVariant || compNode.children[0])
@@ -472,9 +472,26 @@ if (RENDER_ARTWORK && FOCUS_STOPS.length >= 1) {
       for (const key of Object.keys(BOOLEAN_DEFS)) enableAll[key] = true;
       try { compInstance.setProperties(enableAll); } catch (e) {}
     }
-    previewPlaceholder.appendChild(compInstance);
-    const compX = Math.round((PW - ROOT_SIZE.w) / 2);
-    const compY = Math.round((PH - ROOT_SIZE.h) / 2);
+
+    const rootW = Math.round(compInstance.width);
+    const rootH = Math.round(compInstance.height);
+    const leftStaggerExtra = FOCUS_STOPS.length * STAGGER_STEP;
+    const neededW = rootW + 2 * (MARKER_SIZE + MARKER_OFFSET + PADDING) + leftStaggerExtra;
+    const neededH = rootH + 2 * (MARKER_SIZE + MARKER_OFFSET + PADDING);
+    const ARTWORK_W = Math.max(MIN_W, Math.round(neededW));
+    const ARTWORK_H = Math.max(MIN_H, Math.round(neededH));
+
+    const wrapper = figma.createFrame();
+    wrapper.name = 'Artwork wrapper';
+    wrapper.layoutMode = 'NONE';
+    wrapper.resize(ARTWORK_W, ARTWORK_H);
+    wrapper.clipsContent = true;
+    wrapper.fills = [];
+    previewPlaceholder.appendChild(wrapper);
+
+    let compX = Math.round((ARTWORK_W - rootW) / 2);
+    let compY = Math.round((ARTWORK_H - rootH) / 2);
+    wrapper.appendChild(compInstance);
     compInstance.x = compX;
     compInstance.y = compY;
     let artworkNode = compInstance;
@@ -526,7 +543,9 @@ if (RENDER_ARTWORK && FOCUS_STOPS.length >= 1) {
             for (const key of Object.keys(BOOLEAN_DEFS)) enableAll[key] = true;
             try { newInstance.setProperties(enableAll); } catch (e) {}
           }
-          previewPlaceholder.appendChild(newInstance);
+          wrapper.appendChild(newInstance);
+          compX = Math.round((ARTWORK_W - Math.round(newInstance.width)) / 2);
+          compY = Math.round((ARTWORK_H - Math.round(newInstance.height)) / 2);
           newInstance.x = compX;
           newInstance.y = compY;
           artworkNode = newInstance;
@@ -563,26 +582,13 @@ if (RENDER_ARTWORK && FOCUS_STOPS.length >= 1) {
         placeholders[li].characters = ARTWORK_LABELS[li];
       }
       artworkNode = detached;
-      const dAbsX = artworkNode.absoluteTransform[0][2];
-      const dAbsY = artworkNode.absoluteTransform[1][2];
-      for (const stop of FOCUS_STOPS) {
-        const match = findStopNode(artworkNode, stop);
-        if (match) {
-          stop.bbox = {
-            x: Math.round(match.absoluteTransform[0][2] - dAbsX),
-            y: Math.round(match.absoluteTransform[1][2] - dAbsY),
-            w: Math.round(match.width),
-            h: Math.round(match.height)
-          };
-        }
-      }
     }
 
     // --- Focus stop outlines ---
     for (const stop of FOCUS_STOPS) {
       if (!stop.bbox || !stop.bbox.w) continue;
       const outline = figma.createRectangle();
-      previewPlaceholder.appendChild(outline);
+      wrapper.appendChild(outline);
       outline.name = 'Outline ' + (FOCUS_STOPS.indexOf(stop) + 1);
       outline.x = Math.round(compX + stop.bbox.x);
       outline.y = Math.round(compY + stop.bbox.y);
@@ -596,53 +602,94 @@ if (RENDER_ARTWORK && FOCUS_STOPS.length >= 1) {
     const markerExample = frame.findOne(n => n.name === '#marker-example');
     await figma.loadFontAsync({ family: FONT_FAMILY, style: 'Medium' });
 
-    const MARKER_SIZE = 33;
-    const LINE_WIDTH = 1;
-    const MARKER_OFFSET = 40;
+    const validStops = FOCUS_STOPS.filter(s => s.bbox && s.bbox.w);
+    const xCenters = validStops.map(s => s.bbox.x + s.bbox.w / 2);
+    const yCenters = validStops.map(s => s.bbox.y + s.bbox.h / 2);
+    const CLUSTER_THRESHOLD = 20;
+    function isClustered(values) {
+      if (values.length < 2) return true;
+      return (Math.max(...values) - Math.min(...values)) <= CLUSTER_THRESHOLD;
+    }
+    const xClustered = isClustered(xCenters);
+    const yClustered = isClustered(yCenters);
+    let markerStrategy = 'alternating';
+    if (xClustered && yClustered) markerStrategy = 'clockwise';
+    else if (xClustered && !yClustered) markerStrategy = 'leftStagger';
+
+    const CLOCKWISE_SIDES = ['left', 'top', 'right', 'bottom'];
 
     for (let i = 0; i < FOCUS_STOPS.length; i++) {
       const stop = FOCUS_STOPS[i];
+      if (!stop.bbox || !stop.bbox.w) continue;
       const stopNum = i + 1;
       const elCenterX = compX + stop.bbox.x + stop.bbox.w / 2;
+      const elCenterY = compY + stop.bbox.y + stop.bbox.h / 2;
       const elTopY = compY + stop.bbox.y;
       const elBottomY = compY + stop.bbox.y + stop.bbox.h;
+      const elLeftX = compX + stop.bbox.x;
+      const elRightX = compX + stop.bbox.x + stop.bbox.w;
 
       const dot = markerExample.clone();
-      previewPlaceholder.appendChild(dot);
+      wrapper.appendChild(dot);
       dot.name = 'Marker ' + stopNum;
       const numText = dot.findOne(n => n.type === 'TEXT');
       if (numText) numText.characters = String(stopNum);
 
       let dotX, dotY, lineStartX, lineStartY, lineEndX, lineEndY;
 
-      if (stopNum === 1) {
-        dotX = compX - MARKER_OFFSET - MARKER_SIZE;
-        dotY = compY + stop.bbox.y + stop.bbox.h / 2 - MARKER_SIZE / 2;
-        lineStartX = dotX + MARKER_SIZE;
-        lineStartY = compY + stop.bbox.y + stop.bbox.h / 2;
-        lineEndX = compX + stop.bbox.x;
-        lineEndY = lineStartY;
-      } else if (stopNum % 2 === 0) {
-        dotX = elCenterX - MARKER_SIZE / 2;
-        dotY = compY - MARKER_OFFSET - MARKER_SIZE;
-        lineStartX = elCenterX;
-        lineStartY = dotY + MARKER_SIZE;
-        lineEndX = elCenterX;
-        lineEndY = elTopY;
+      if (markerStrategy === 'clockwise') {
+        const side = CLOCKWISE_SIDES[(stopNum - 1) % 4];
+        if (side === 'left') {
+          dotX = compX - MARKER_OFFSET - MARKER_SIZE;
+          dotY = elCenterY - MARKER_SIZE / 2;
+          lineStartX = dotX + MARKER_SIZE; lineStartY = elCenterY;
+          lineEndX = elLeftX; lineEndY = elCenterY;
+        } else if (side === 'top') {
+          dotX = elCenterX - MARKER_SIZE / 2;
+          dotY = compY - MARKER_OFFSET - MARKER_SIZE;
+          lineStartX = elCenterX; lineStartY = dotY + MARKER_SIZE;
+          lineEndX = elCenterX; lineEndY = elTopY;
+        } else if (side === 'right') {
+          dotX = compX + Math.round(artworkNode.width) + MARKER_OFFSET;
+          dotY = elCenterY - MARKER_SIZE / 2;
+          lineStartX = dotX; lineStartY = elCenterY;
+          lineEndX = elRightX; lineEndY = elCenterY;
+        } else {
+          dotX = elCenterX - MARKER_SIZE / 2;
+          dotY = elBottomY + MARKER_OFFSET;
+          lineStartX = elCenterX; lineStartY = elBottomY;
+          lineEndX = elCenterX; lineEndY = dotY;
+        }
+      } else if (markerStrategy === 'leftStagger') {
+        const staggerX = compX - MARKER_OFFSET - MARKER_SIZE - (stopNum - 1) * STAGGER_STEP;
+        dotX = staggerX;
+        dotY = elCenterY - MARKER_SIZE / 2;
+        lineStartX = dotX + MARKER_SIZE; lineStartY = elCenterY;
+        lineEndX = elLeftX; lineEndY = elCenterY;
       } else {
-        dotX = elCenterX - MARKER_SIZE / 2;
-        dotY = elBottomY + MARKER_OFFSET;
-        lineStartX = elCenterX;
-        lineStartY = elBottomY;
-        lineEndX = elCenterX;
-        lineEndY = dotY;
+        if (stopNum === 1) {
+          dotX = compX - MARKER_OFFSET - MARKER_SIZE;
+          dotY = elCenterY - MARKER_SIZE / 2;
+          lineStartX = dotX + MARKER_SIZE; lineStartY = elCenterY;
+          lineEndX = elLeftX; lineEndY = elCenterY;
+        } else if (stopNum % 2 === 0) {
+          dotX = elCenterX - MARKER_SIZE / 2;
+          dotY = compY - MARKER_OFFSET - MARKER_SIZE;
+          lineStartX = elCenterX; lineStartY = dotY + MARKER_SIZE;
+          lineEndX = elCenterX; lineEndY = elTopY;
+        } else {
+          dotX = elCenterX - MARKER_SIZE / 2;
+          dotY = elBottomY + MARKER_OFFSET;
+          lineStartX = elCenterX; lineStartY = elBottomY;
+          lineEndX = elCenterX; lineEndY = dotY;
+        }
       }
 
       dot.x = Math.round(dotX);
       dot.y = Math.round(dotY);
 
       const line = figma.createRectangle();
-      previewPlaceholder.appendChild(line);
+      wrapper.appendChild(line);
       line.name = 'Line ' + stopNum;
       line.fills = [{ type: 'SOLID', color: MARKER_COLOR }];
 
@@ -701,7 +748,6 @@ For each state:
 - `FONT_FAMILY` = the `fontFamily` value from `uspecs.config.json` (default: `Inter`)
 - `RENDER_ARTWORK` = `true` when extraction data is available (Figma link input), `false` for screenshot-only input
 - `COMP_SET_ID` = `compSetNodeId` from extraction (set to `''` when `RENDER_ARTWORK` is `false`)
-- `ROOT_SIZE` = `rootSize` from extraction (set to `{ w: 0, h: 0 }` when `RENDER_ARTWORK` is `false`)
 - `FOCUS_STOPS` = array of `{ index, name, slotIndex?, bbox: {x, y, w, h} }` from extraction elements (set to `[]` when `RENDER_ARTWORK` is `false`). `slotIndex` is present when the element was extracted from a slot container with identically-named siblings — used for index-based matching consistent with anatomy.
 - `VARIANT_PROPS` = variant axis values for this entry (set to `{}` when `RENDER_ARTWORK` is `false` or for the focus order entry)
 - `BOOLEAN_DEFS` = `booleanDefs` from extraction (set to `{}` when `RENDER_ARTWORK` is `false`)
@@ -734,16 +780,17 @@ For each state:
 - Focus order is rendered as the first `#state-template` clone with title "Focus order". It contains a single section with the focus order tables. Regular states follow after.
 - Each state entry is rendered in a single unified `figma_execute` call (Step 10–11) that handles both table rendering and artwork rendering. This avoids the previous pattern of requiring the agent to manually splice separate artwork code into each state call.
 - **Markers per state, not global**: Unlike anatomy which has one artwork, voice renders markers inside each state's `Preview placeholder`. This is correct because focus order can change between states (e.g., error state might add/remove elements). Markers are always rendered, even for single-stop components — the number shows reading order position.
-- The `RENDER_ARTWORK` flag controls whether artwork is generated. Set to `true` when extraction data is available (Figma link input), `false` for screenshot-only input. When `false`, the `COMP_SET_ID`, `ROOT_SIZE`, and `FOCUS_STOPS` parameters are ignored.
+- The `RENDER_ARTWORK` flag controls whether artwork is generated. Set to `true` when extraction data is available (Figma link input), `false` for screenshot-only input. When `false`, the `COMP_SET_ID` and `FOCUS_STOPS` parameters are ignored.
 - The extraction script in Step 4 is a lightweight version of anatomy's extraction — it captures child names, types, and bounding boxes for marker positioning without extracting fills, tokens, or typography.
-- Marker positioning alternates: #1 goes left of the component, even numbers go above, odd numbers go below (same pattern as anatomy).
+- **Dynamic preview sizing**: The `Preview placeholder` keeps its template auto-layout. An inner wrapper frame (`layoutMode = 'NONE'`, `clipsContent = true`, transparent fills) is created and appended as an auto-layout child. The wrapper is sized dynamically based on the live instance's `width`/`height` plus marker margins. The component instance, outlines, markers, and lines are all placed inside the wrapper using absolute coordinates, while the template auto-layout controls the wrapper's position within the overall spec. This eliminates the stale `ROOT_SIZE` centering problem — `compX`/`compY` are calculated from live rendered dimensions. The sizing formula accounts for the number of focus stops (`leftStaggerExtra`) so the left-stagger strategy never runs out of room.
+- **Marker positioning** uses three strategies with automatic detection (same as anatomy): **clockwise** (concentric/overlapping elements — left, top, right, bottom rotation), **left stagger** (vertically stacked elements sharing an x-center — all markers to the left at staggered horizontal offsets), or **alternating** (mixed layouts — #1 left, even numbers above, odd numbers below). Strategy is auto-detected by clustering focus stop centers: if both x and y centers are within 20px, clockwise; if only x centers are clustered, left stagger; otherwise, alternating.
 - After all state entries are rendered, both `#marker-example` and `#state-template` are hidden in a single cleanup call.
 - The table header row uses `#focus-order` (280px) and `#announcement` (1120px) columns inside `#header-row`. The `#focus-order` column shows the reading order number (`focusOrderIndex`), and `#announcement` shows the part name + full announcement combined (e.g., "Button \"Submit, button\"").
 - The instruction file (`screen-reader/agent-screenreader-instruction.md`) and platform reference files contain the schema, merge analysis rules, and platform-specific patterns. The AI reasoning for merge analysis and announcement generation is unchanged — only the delivery mechanism has changed.
 - Variant properties are applied via `setProperties()` after instance creation; the `try/catch` handles behavioral states (e.g., "focused") that don't map to a Figma variant.
-- Bounding boxes are recalculated from the live instance after variant switching, so markers track actual element positions in that variant.
+- Bounding boxes are captured from the live instance before any `detachInstance()` call, so markers track actual element positions. The pre-detach capture avoids the fragility of post-detach name matching, where SLOT nodes reorganize and `findStopNode` may fail.
 - For the Focus Order entry, focus stop visibility is maximized in two steps: (1) all boolean properties from `booleanDefs` are force-enabled via `setProperties` so boolean-gated elements (e.g., trailing clear button) appear; (2) if any documented focus stops are still missing after boolean-enable, all state variants are iterated and the one resolving the most focus stop names via `findStopNode` is selected. Per-state entries do NOT enable booleans or run the richest-variant fallback — they use `VARIANT_PROPS` to show the exact state variant, so only elements visible in that state appear.
 - **Artwork label modification**: After the richest-variant fallback resolves (if applicable), the surviving instance is detached — along with all nested sub-instances — to convert text nodes into editable plain text. "Label" placeholders are then replaced with `ARTWORK_LABELS` values in document order. Detaching also resolves font access failures on nested instances, since detached text nodes are on the current page. Label modification MUST happen after the fallback to avoid conflicts with `setProperties()` (which requires a live instance).
 - **Focus stop outlines**: Pink dashed rectangles (`dashPattern = [4, 4]`, `strokeWeight = 1`, `MARKER_COLOR`) are drawn around each focus stop's bounding box in the artwork. These use the same values as the anatomy skill for cross-skill visual consistency.
-- **Composable slot handling**: When a child container holds multiple identically-named INSTANCE children (composable slots like button groups, chip groups, tab bars), the extraction script recurses into the slot and extracts each child individually with a `slotIndex` field. The `findStopNode` helper uses `slotIndex` for index-based matching (consistent with anatomy's approach), falling back to name-based `findOne` for uniquely-named elements.
+- **Composable slot handling**: When a child container holds multiple identically-named INSTANCE children (composable slots like button groups, chip groups, tab bars), the extraction script recurses into the slot and extracts each child individually with a `slotIndex` field. The `findStopNode` helper uses `slotIndex` for index-based matching (consistent with anatomy's approach), falling back to name-based `findOne` for uniquely-named elements. Bbox capture from `findStopNode` always runs on the live instance before detach, ensuring SLOT nodes and their children are intact.
 - **Behavioral states**: States driven by user-described configurations (single-select vs. multi-select, collapsed vs. expanded) that don't correspond to Figma variant axes are documented as separate entries with default variant props. The "Disabled" rule in Step 5E-bis applies to component-level disabled only — sub-component disabled is shown as an archetype within a behavioral state.

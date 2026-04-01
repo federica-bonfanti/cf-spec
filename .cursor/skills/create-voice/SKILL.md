@@ -26,7 +26,7 @@ Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for ever
 
 **`figma-mcp` requires `fileKey` on every call.** Extract it once from the user's Figma URL at the start of the workflow. For branch URLs (`figma.com/design/:fileKey/branch/:branchKey/:fileName`), use `:branchKey` as the fileKey.
 
-**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, descendant nodes (text, instances) may not be fully loaded — methods like `getRangeAllFontNames`, `findAll`, or `characters` can fail with `TypeError`. Insert this page-loading block immediately after `getNodeByIdAsync`:
+**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, the page content may not be loaded — `findAll`, `findOne`, and `characters` will fail with `TypeError` until the page is activated. Insert this page-loading block immediately after `getNodeByIdAsync`:
 
 ```javascript
 let _p = node; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
@@ -202,19 +202,10 @@ Save the returned JSON — you will use `componentName`, `compSetNodeId`, `rootS
 
 Using gathered context, identify:
 
-**A. List all visual parts:** label, input, hint text, icon, trailing button, container, divider, etc.
+**A. List all visual parts** per the instruction file (Step 1).
 
 **B. Merge analysis — determine what gets focus vs. what merges:**
-For each visual part, ask: "Is this an independent focus stop?"
-- **Focus stop** — interactive element (button, input, link, switch) or navigation container (tablist, menu)
-- **Merged into parent** — provides name/value/hint for a focus stop (label → input, hint → input, subtitle → list item)
-- **Live region** — announced reactively, not a focus stop (error message, status update)
-- **Decorative** — not announced (divider, background shape)
-
-Consider platform-specific merge mechanisms:
-- iOS: `accessibilityElement = true` on parent merges children
-- Android: `mergeDescendants = true` merges children; `clickable = true` children break out
-- Web: `<label for>`, `aria-describedby` merge; separate `<button>` / `<input>` never merge
+Run the merge analysis from the instruction file (Step 2) to classify each visual part as: focus stop, merged into parent, live region, or decorative.
 
 **C. Count actual focus stops** — this determines whether `focusOrder` is needed (2+ stops) or not (1 stop).
 
@@ -224,26 +215,15 @@ Consider platform-specific merge mechanisms:
 
 **E-bis. State grouping — collapse states with identical accessibility semantics:**
 
-Not every Figma variant state warrants its own spec entry. Filter variant axes using the `A11Y_AXES` pattern `/state|mode|interaction/i` to identify axes that may affect accessibility semantics (skip purely visual axes like Size, Shape, Theme). Then compare all state variants on these three dimensions:
+Filter variant axes using the `A11Y_AXES` pattern `/state|mode|interaction/i` to identify axes that may affect accessibility semantics (skip purely visual axes like Size, Shape, Theme). Then apply the state-grouping rules from the instruction file (Step 4) to collapse states with identical screen reader behavior and keep states with unique accessibility semantics separate.
 
-1. **Focus stop count** — same number of focus stops?
-2. **Semantic properties** — same roles, labels, values, traits, ARIA attributes?
-3. **Announcement pattern** — same screen reader announcement text (ignoring state-specific value differences)?
-
-If two or more states are identical on all three dimensions, group them into a single entry with a combined title (e.g., "Text field Enabled / Pressed / Active"). Document one representative per group.
-
-**Always keep separate entries** for states with unique accessibility behavior:
-- Error (adds `aria-invalid`, error message live region)
-- Disabled (changes traits/role to dimmed/disabled) — applies to **component-level** disabled states only. When disabled is a sub-component property (e.g., individual items in a group), demonstrate it as an archetype within a behavioral state rather than as a standalone entry.
-- Read-only (changes editability semantics)
-- Loading (adds live region or progress indicator)
-- Any state that changes the focus stop count
-
-**E-ter. Behavioral states from user context:** Review the user's description for behavioral configurations (e.g., single-select vs. multi-select, read-only vs. editable, collapsed vs. expanded) that are not represented as Figma variant axes. These should be documented as separate state entries when they produce different semantic properties (different roles, different ARIA attributes, different selection models). Map these to default variant props since they don't correspond to a Figma axis. For grouped controls with selection models, document one state per selection behavior (single-select, multi-select) rather than generic enabled/disabled.
+**E-ter. Behavioral states from user context:** Identify behavioral states per the instruction file (Step 4). Map each to default variant props since they don't correspond to a Figma axis.
 
 **F. State-to-variant mapping:** Using the `variantAxes` from extraction, map each documented state to a set of variant property key-value pairs. Match state names to variant axis options (case-insensitive). When a state name matches an option on a variant axis, set that axis to the matching value and leave other axes at their defaults. When no match is found (e.g., the state is behavioral like "focused" rather than a Figma variant), use the default variant properties. Save this mapping as `stateVariantProps` — a dict from state name to `{ [axisName]: value }`.
 
 ### Step 6: Generate Structured Data
+
+Do NOT output JSON to the user. All data flows directly into Figma template placeholders via `figma_execute`.
 
 Follow the schema in the instruction file. Build the data as a structured object with:
 - `componentName`: string
@@ -301,15 +281,15 @@ const textNodes = frame.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 // Set component name with "Screen reader" suffix
 const compNameFrame = frame.findOne(n => n.name === '#compName');
@@ -368,15 +348,15 @@ const textNodes = stateClone.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const titleFrame = stateClone.findOne(n => n.name === '#state-title');
 if (titleFrame) {
@@ -579,7 +559,7 @@ if (RENDER_ARTWORK && FOCUS_STOPS.length >= 1) {
       }
       const placeholders = detached.findAll(n => n.type === 'TEXT' && n.characters === 'Label');
       for (let li = 0; li < placeholders.length && li < ARTWORK_LABELS.length; li++) {
-        await figma.loadFontAsync(placeholders[li].fontName);
+        try { await figma.loadFontAsync(placeholders[li].fontName); } catch {}
         placeholders[li].characters = ARTWORK_LABELS[li];
       }
       artworkNode = detached;
@@ -763,7 +743,7 @@ For each state:
 - Variant properties are applied via `setProperties()` after instance creation; the `try/catch` handles behavioral states (e.g., "focused") that don't map to a Figma variant.
 - Bounding boxes are recalculated from the live instance after variant switching, so markers track actual element positions in that variant.
 - For the Focus Order entry, focus stop visibility is maximized in two steps: (1) all boolean properties from `booleanDefs` are force-enabled via `setProperties` so boolean-gated elements (e.g., trailing clear button) appear; (2) if any documented focus stops are still missing after boolean-enable, all state variants are iterated and the one resolving the most focus stop names via `findStopNode` is selected. Per-state entries do NOT enable booleans or run the richest-variant fallback — they use `VARIANT_PROPS` to show the exact state variant, so only elements visible in that state appear.
-- **Artwork label modification**: After the richest-variant fallback resolves (if applicable), the surviving instance is detached — along with all nested sub-instances — to convert text nodes into editable plain text. "Label" placeholders are then replaced with `ARTWORK_LABELS` values in document order. Detaching also resolves `getRangeAllFontNames()` failures on nested instances, since detached text nodes are on the current page. Label modification MUST happen after the fallback to avoid conflicts with `setProperties()` (which requires a live instance).
+- **Artwork label modification**: After the richest-variant fallback resolves (if applicable), the surviving instance is detached — along with all nested sub-instances — to convert text nodes into editable plain text. "Label" placeholders are then replaced with `ARTWORK_LABELS` values in document order. Detaching also resolves font access failures on nested instances, since detached text nodes are on the current page. Label modification MUST happen after the fallback to avoid conflicts with `setProperties()` (which requires a live instance).
 - **Focus stop outlines**: Pink dashed rectangles (`dashPattern = [4, 4]`, `strokeWeight = 1`, `MARKER_COLOR`) are drawn around each focus stop's bounding box in the artwork. These use the same values as the anatomy skill for cross-skill visual consistency.
 - **Composable slot handling**: When a child container holds multiple identically-named INSTANCE children (composable slots like button groups, chip groups, tab bars), the extraction script recurses into the slot and extracts each child individually with a `slotIndex` field. The `findStopNode` helper uses `slotIndex` for index-based matching (consistent with anatomy's approach), falling back to name-based `findOne` for uniquely-named elements.
 - **Behavioral states**: States driven by user-described configurations (single-select vs. multi-select, collapsed vs. expanded) that don't correspond to Figma variant axes are documented as separate entries with default variant props. The "Disabled" rule in Step 5E-bis applies to component-level disabled only — sub-component disabled is shown as an archetype within a behavioral state.

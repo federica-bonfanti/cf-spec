@@ -26,7 +26,7 @@ Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for ever
 
 **`figma-mcp` requires `fileKey` on every call.** Extract it once from the user's Figma URL at the start of the workflow. For branch URLs (`figma.com/design/:fileKey/branch/:branchKey/:fileName`), use `:branchKey` as the fileKey.
 
-**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, descendant nodes (text, instances) may not be fully loaded — methods like `getRangeAllFontNames`, `findAll`, or `characters` can fail with `TypeError`. Insert this page-loading block immediately after `getNodeByIdAsync`:
+**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, the page content may not be loaded — `findAll`, `findOne`, and `characters` will fail with `TypeError` until the page is activated. Insert this page-loading block immediately after `getNodeByIdAsync`:
 
 ```javascript
 let _p = node; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
@@ -61,7 +61,7 @@ Task Progress:
 - [ ] Step 4: Gather context (JSON from paste, file reference, or prompt user)
 - [ ] Step 5: Parse and validate JSON (including segments[] and hasAnimatedSegments)
 - [ ] Step 6: Transform data (read pre-computed segments, compute track width, timeline positions)
-- [ ] Step 7: Re-read instruction file (Common Mistakes, Do NOT sections) and audit
+- [ ] Step 7: Re-read instruction file (Errors and Anti-Patterns, Validation Checklist) and audit
 - [ ] Step 8: Import and detach the Motion template
 - [ ] Step 9: Fill header fields
 - [ ] Step 10: Generate time ruler
@@ -111,16 +111,7 @@ Also accept any optional screenshots, recordings, or descriptions the user provi
 
 ### Step 5: Parse and Validate JSON
 
-Validate the clipboard JSON against the schema defined in the instruction file:
-
-1. Check for required top-level keys: `composition`, `layers`
-2. Verify `composition` has: `name`, `duration`, `durationMs`, `frameRate`, `width`, `height`
-3. Verify `layers` is a non-empty array
-4. For each layer: verify `index`, `name`, `properties`, `hasAnimatedSegments` exist
-5. For each property: verify `name`, `path`, `segments` exist
-6. For each segment: verify `startMs`, `endMs`, `durationMs`, `fromValue`, `toValue`, `barLabel`, `easing`, `easingType` exist
-
-If validation fails, tell the user exactly which field is missing or malformed and ask them to re-export.
+Validate the clipboard JSON against the schema and validation rules in the instruction file (JSON Schema and JSON Validation Rules sections). If validation fails, tell the user exactly which field is missing or malformed and ask them to re-export.
 
 ### Step 6: Transform Data
 
@@ -141,17 +132,12 @@ Pass `trackWidth` and `pxPerMs` to the Figma rendering code. `pxPerMs` is a fixe
 
 At render time, resize both `#track-area` and `#ruler-track` to this computed `trackWidth`. The parent containers use HUG sizing and expand automatically.
 
-**6d. Format composition meta:**
-```
-"Duration: {composition.durationMs}ms · Frame rate: {frameRate}fps · {width}×{height}"
-```
-Read `durationMs` directly from the JSON (e.g., `durationMs: 3017` → `"Duration: 3017ms"`). Use `×` (Unicode multiplication sign), not "x".
+**6d. Format composition meta** per the instruction file's Composition Meta rules. Save as `COMPOSITION_META`.
 
 ### Step 7: Audit
 
 Re-read the instruction file, focusing on:
-- **Common Mistakes** section
-- **Do NOT** section
+- **Errors and Anti-Patterns** section
 - **Pre-Output Validation Checklist**
 
 Check your transformed data against each rule. Fix any violations.
@@ -189,15 +175,15 @@ const textNodes = frame.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const compName = frame.findOne(n => n.name === '#component-name');
 if (compName) {
@@ -253,7 +239,7 @@ if (!tickTemplate) return { error: '#tick template not found in #ruler-track' };
 const tickTextNodes = tickTemplate.findAll(n => n.type === 'TEXT');
 for (const tn of tickTextNodes) {
   if (tn.characters.length > 0) {
-    await figma.loadFontAsync(tn.fontName);
+    try { await figma.loadFontAsync(tn.fontName); } catch {}
   }
 }
 
@@ -275,7 +261,7 @@ for (let ms = 0; ms <= COMP_DURATION_MS; ms += tickInterval) {
 
   const label = tick.findOne(n => n.type === 'TEXT');
   if (label) {
-    await figma.loadFontAsync(label.fontName);
+    try { await figma.loadFontAsync(label.fontName); } catch {}
     label.characters = ms + 'ms';
   }
 }
@@ -310,15 +296,15 @@ const textNodes = layer.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 // Read legend colors directly from color nodes
 const colorBezier = frame.findOne(n => n.name === '#color-bezier');
@@ -360,7 +346,7 @@ for (let p = 0; p < PROPERTIES.length; p++) {
   const propTextNodes = propNode.findAll(n => n.type === 'TEXT');
   for (const tn of propTextNodes) {
     if (tn.characters.length > 0) {
-      await figma.loadFontAsync(tn.fontName);
+      try { await figma.loadFontAsync(tn.fontName); } catch {}
     }
   }
 
@@ -394,7 +380,7 @@ for (let p = 0; p < PROPERTIES.length; p++) {
       if (barLabel) {
         const t = barLabel.type === 'TEXT' ? barLabel : barLabel.findOne(n => n.type === 'TEXT');
         if (t) {
-          await figma.loadFontAsync(t.fontName);
+          try { await figma.loadFontAsync(t.fontName); } catch {}
           t.characters = seg.barLabel;
         }
       }
@@ -438,15 +424,15 @@ const textNodes = rowTemplate.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 for (let i = 0; i < ROWS.length; i++) {
   const row = ROWS[i];
@@ -485,7 +471,6 @@ return { success: true, rowCount: ROWS.length };
    - All layers with `hasAnimatedSegments: true` are present in the timeline
    - Layers with `hasAnimatedSegments: false` are absent
    - Each property has the correct number of bars (one per segment in `segments[]`)
-   - Bar labels show from->to value transitions (e.g., "0% -> 115%"), not easing text
    - Bar colors match the easing type (blue=Bezier, gray=Linear, orange=Hold from legend)
    - Bars are positioned correctly within the track (no overlaps, no overflow)
    - Time ruler ticks are evenly spaced and aligned with bar positions
@@ -498,12 +483,5 @@ return { success: true, rowCount: ROWS.length };
 
 - The motion spec template key is stored in `uspecs.config.json` under `templateKeys.motionSpec` and is configured via `@firstrun`.
 - Unlike other skills, motion spec data comes from the clipboard (After Effects export), not from Figma MCP extraction. There is no component to inspect in Figma.
-- The template uses absolute positioning for timeline bars within `#track-area` (`layoutMode: NONE`).
-- **Track width is dynamic**: computed as `max(composition.durationMs * 0.64 + 50, 1600)` (fixed 0.64 px/ms rate + 50px right padding for tick labels, min 1600px). Both `#track-area` and `#ruler-track` are resized to this width. Parent containers use HUG sizing and expand automatically. Bar positions are computed inside the Figma code using the fixed `pxPerMs` (0.64).
-- Bar colors are read from legend color nodes (`#color-bezier`, `#color-linear`, `#color-hold`) at render time — fill is read directly from the node, no swatch child.
-- Bar labels show **from -> to value transitions** (e.g., "0% -> 115%"), not easing information. Easing is communicated through bar color.
-- Fonts are preserved from the template — the agent loads whatever font each text node already has rather than substituting a different font family.
 - `#property-template`, `#bar-template`, and `#table-row-template` may be hidden in the template by default. Clones must set `.visible = true`; originals are hidden after cloning.
-- **No-change segments are pre-filtered**: the export script filters out segments where from and to values are identical. Layers with `hasAnimatedSegments: false` should be skipped entirely.
 - The `figma_execute` splitting strategy is: 1 call for import+detach, 1 for header, 1 for time ruler, 1 per layer for timeline, 1 for hiding templates, and 1 (or more) for table rows.
-- Layer order from the JSON is preserved in the rendered timeline (after filtering).

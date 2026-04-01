@@ -28,7 +28,7 @@ Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for ever
 
 **`figma-mcp` requires `fileKey` on every call.** Extract it once from the user's Figma URL at the start of the workflow. For branch URLs (`figma.com/design/:fileKey/branch/:branchKey/:fileName`), use `:branchKey` as the fileKey.
 
-**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, descendant nodes (text, instances) may not be fully loaded — methods like `getRangeAllFontNames`, `findAll`, or `characters` can fail with `TypeError`. Insert this page-loading block immediately after `getNodeByIdAsync`:
+**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, the page content may not be loaded — `findAll`, `findOne`, and `characters` will fail with `TypeError` until the page is activated. Insert this page-loading block immediately after `getNodeByIdAsync`:
 
 ```javascript
 let _p = node; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
@@ -87,27 +87,22 @@ Navigate to the component file and run the extraction script via `figma_execute`
 
 **Extract the node ID from the URL:** Figma URLs contain `node-id=123-456` → use `123:456`.
 
-This produces a **pre-classified element array** with deterministic element types, resolved prop bindings, and unwrapped instance wrappers — no AI reasoning needed for classification.
+This produces a **pre-classified element array** with deterministic element types, resolved prop bindings, and unwrapped instance wrappers — no AI reasoning needed for classification. See the output contract after the script for field documentation.
 
-**Classification enum** (closed set on each element's `classification` field):
-- `instance` — direct INSTANCE child
-- `instance-unwrapped` — FRAME/GROUP that wraps a single INSTANCE descendant (instance wrapper); displayed as the inner sub-component
-- `text` — TEXT node
-- `slot` — SLOT node (composable slot container accepting child components via code)
-- `container` — FRAME/GROUP with multiple children (genuine layout container)
-- `structural` — RECTANGLE, VECTOR, ELLIPSE, LINE, POLYGON, STAR, BOOLEAN_OPERATION, or empty FRAME
-
-**Prop binding resolution:** Boolean properties are resolved to their controlling element by index (`boundElementIndex`), not by name matching. Each element carries `controlledByBoolean: { propName, rawKey, defaultValue }` when a boolean controls it, or `null` otherwise.
-
-**Instance-wrapper unwrapping:** FRAMEs that wrap a single INSTANCE descendant (through single-child nesting) are automatically unwrapped: `name` is replaced with the inner sub-component's `componentSetName`, `nodeType` is set to `'INSTANCE'`, and `originalName` preserves the FRAME name. The `bbox` stays on the wrapper for marker positioning.
-
-**Section eligibility:** `shouldCreateSection` is set to `true` for all `instance` and `instance-unwrapped` elements, except those matching utility names (Spacer, Divider, etc.). All other classifications (`text`, `slot`, `container`, `structural`) default to `false` — they do not get per-child anatomy sections.
+**Wrapper traversal sync warning:** The single-child auto-layout / SLOT / background-rect traversal logic appears in three places — the extraction script below, the Step 8 composition artwork script, and the Step 8b per-child artwork script — and must stay in sync.
 
 Run this extraction script, replacing `TARGET_NODE_ID` with the actual node ID:
 
 ```javascript
 const TARGET_NODE_ID = '__NODE_ID__';
 const STRUCTURAL_TYPES = ['RECTANGLE', 'VECTOR', 'ELLIPSE', 'LINE', 'POLYGON', 'STAR', 'BOOLEAN_OPERATION'];
+
+function hasVisuals(n) {
+  const f = n.fills && n.fills.length > 0 && n.fills.some(f => f.visible !== false);
+  const s = n.strokes && n.strokes.length > 0 && n.strokes.some(s => s.visible !== false);
+  const e = n.effects && n.effects.length > 0 && n.effects.some(e => e.visible !== false);
+  return { hasFills: !!f, hasStrokes: !!s, hasEffects: !!e, hasAny: !!f || !!s || !!e };
+}
 
 async function resolveInstanceInfo(instNode) {
   try {
@@ -235,25 +230,75 @@ if (!node || (node.type !== 'COMPONENT_SET' && node.type !== 'COMPONENT')) {
 }
 
 const isComponentSet = node.type === 'COMPONENT_SET';
-const variant = isComponentSet ? (node.defaultVariant || node.children[0]) : node;
-const absX = variant.absoluteTransform[0][2];
-const absY = variant.absoluteTransform[1][2];
 
-let childContainer = variant;
-while (childContainer.children.length === 1 && childContainer.children[0].type === 'FRAME' && childContainer.children[0].layoutMode !== 'NONE') {
-  childContainer = childContainer.children[0];
-}
-if (childContainer.children.length === 1 && childContainer.children[0].type === 'SLOT') {
-  childContainer = childContainer.children[0];
+function resolveChildContainer(v) {
+  let cc = v;
+  while (cc.children.length === 1 && cc.children[0].type === 'FRAME' && cc.children[0].layoutMode !== 'NONE') {
+    cc = cc.children[0];
+  }
+  if (cc.children.length === 1 && cc.children[0].type === 'SLOT') {
+    cc = cc.children[0];
+  }
+  if (cc === v && cc.children.length > 1) {
+    const autoLayoutFrames = cc.children.filter(c => c.type === 'FRAME' && c.layoutMode !== 'NONE' && ('children' in c) && c.children.length >= 2);
+    const structuralOnly = cc.children.filter(c => STRUCTURAL_TYPES.includes(c.type));
+    if (autoLayoutFrames.length === 1 && structuralOnly.length === cc.children.length - 1) {
+      cc = autoLayoutFrames[0];
+    }
+  }
+  return cc;
 }
 
-if (childContainer === variant && childContainer.children.length > 1) {
-  const autoLayoutFrames = childContainer.children.filter(c => c.type === 'FRAME' && c.layoutMode !== 'NONE' && ('children' in c) && c.children.length >= 2);
-  const structuralOnly = childContainer.children.filter(c => STRUCTURAL_TYPES.includes(c.type));
-  if (autoLayoutFrames.length === 1 && structuralOnly.length === childContainer.children.length - 1) {
-    childContainer = autoLayoutFrames[0];
+let variant = isComponentSet ? (node.defaultVariant || node.children[0]) : node;
+let childContainer = resolveChildContainer(variant);
+
+if (isComponentSet && childContainer.children.length === 0 && node.children.length > 1) {
+  function countDescendants(n) {
+    let c = 0;
+    if ('children' in n) { for (const ch of n.children) { c += 1 + countDescendants(ch); } }
+    return c;
+  }
+  let bestVariant = variant;
+  let bestCount = 0;
+  for (const v of node.children) {
+    const cnt = countDescendants(v);
+    if (cnt > bestCount) { bestCount = cnt; bestVariant = v; }
+  }
+  if (bestVariant !== variant) {
+    variant = bestVariant;
+    childContainer = resolveChildContainer(variant);
   }
 }
+
+const varAbsX = variant.absoluteTransform[0][2];
+const varAbsY = variant.absoluteTransform[1][2];
+
+const rootVis = hasVisuals(variant);
+const rootVariantVisuals = {
+  hasFills: rootVis.hasFills, hasStrokes: rootVis.hasStrokes, hasEffects: rootVis.hasEffects,
+  cornerRadius: variant.cornerRadius || 0
+};
+
+const traversedFrames = [];
+let walker = variant;
+while (walker !== childContainer) {
+  if ('children' in walker && walker.children.length === 1) {
+    const child = walker.children[0];
+    const vis = hasVisuals(child);
+    const cAbsX = child.absoluteTransform[0][2];
+    const cAbsY = child.absoluteTransform[1][2];
+    traversedFrames.push({
+      name: child.name, nodeType: child.type,
+      hasFills: vis.hasFills, hasStrokes: vis.hasStrokes, hasEffects: vis.hasEffects,
+      cornerRadius: child.cornerRadius || 0,
+      bbox: { x: Math.round(cAbsX - varAbsX), y: Math.round(cAbsY - varAbsY), w: Math.round(child.width), h: Math.round(child.height) }
+    });
+    walker = child;
+  } else break;
+}
+
+const absX = varAbsX;
+const absY = varAbsY;
 
 const elements = [];
 let idx = 1;
@@ -340,17 +385,20 @@ for (const el of elements) {
 return {
   componentName: node.name,
   variantName: variant.name,
+  selectedVariantId: variant.id,
   compSetNodeId: TARGET_NODE_ID,
   isComponentSet,
   rootSize: { w: Math.round(variant.width), h: Math.round(variant.height) },
   elements,
   booleanProps,
   variantAxes,
-  instanceSwapProps
+  instanceSwapProps,
+  rootVariantVisuals,
+  traversedFrames
 };
 ```
 
-Save the returned JSON — you will use `componentName`, `compSetNodeId`, `isComponentSet`, `rootSize`, `elements`, `booleanProps`, `variantAxes`, and `instanceSwapProps` in subsequent steps.
+Save the returned JSON — you will use `componentName`, `compSetNodeId`, `selectedVariantId`, `isComponentSet`, `rootSize`, `elements`, `booleanProps`, `variantAxes`, `instanceSwapProps`, `rootVariantVisuals`, and `traversedFrames` in subsequent steps. `selectedVariantId` is the variant that was actually used for extraction — it may differ from the default variant if the default produced 0 elements and a richer variant was selected.
 
 Each element carries pre-resolved fields:
 - `classification` — closed enum: `instance`, `instance-unwrapped`, `text`, `slot`, `container`, `structural`
@@ -359,6 +407,10 @@ Each element carries pre-resolved fields:
 - `originalName` — the FRAME name before unwrapping (only on `instance-unwrapped` elements)
 - `shouldCreateSection` — `true` for `instance`/`instance-unwrapped`, `false` for utility names and other types
 - `childVariantAxes`, `childVariantCount` — variant data from the child component set
+
+Additional extraction-level fields:
+- `rootVariantVisuals` — `{ hasFills, hasStrokes, hasEffects, cornerRadius }` for the root variant frame. When `hasFills` or `hasEffects` is true, the variant itself has a visual layer (e.g., statelayer/backplate) that Step 4 should insert as a synthetic element.
+- `traversedFrames[]` — Frames the `resolveChildContainer` traversal walked through to reach the child container. Each entry has `{ name, nodeType, hasFills, hasStrokes, hasEffects, cornerRadius, bbox }`. Frames with fills, strokes, or effects are visually meaningful and should be inserted as synthetic elements by Step 4.
 
 The `fullTree` field has been removed. Classification, instance-wrapper detection, and prop binding are now handled deterministically in the extraction script itself.
 
@@ -370,27 +422,25 @@ Read the instruction file `anatomy/agent-anatomy-instruction.md`, then enrich th
 
 **Process:**
 
-1. **Read** `anatomy/agent-anatomy-instruction.md` for note-writing guidelines and validation checklist.
+1. **Read** `anatomy/agent-anatomy-instruction.md` for note-writing guidelines, validation checklist, and unhide strategy rules.
 
-2. **Validate** the pre-classified extraction data:
-   - Every element has a `classification` from the closed set: `instance`, `instance-unwrapped`, `text`, `slot`, `container`, `structural`.
-   - Every `instance-unwrapped` element has `wrappedInstance`, `originalName`, and `nodeType === 'INSTANCE'`.
-   - Boolean bindings are resolved: check that `controlledByBoolean` is set on elements that should be boolean-controlled. If the extraction script missed a binding (e.g., `controlledByBoolean` is `null` on an element whose name matches a `booleanProps[].name`), flag it but do not re-run classification — note it in the element's notes.
-   - `shouldCreateSection` is set on every `instance` and `instance-unwrapped` element.
+2. **Validate** the pre-classified extraction data per the instruction file's validation checklist.
 
-3. **Set unhide strategy** for hidden elements (`visible === false`):
-   - If `controlledByBoolean` is set: `unhideStrategy: { method: 'boolean', booleanName: controlledByBoolean.propName, booleanRawKey: controlledByBoolean.rawKey }`.
-   - If `controlledByBoolean` is `null`: `unhideStrategy: { method: 'direct' }`.
+2b. **Detect skipped visual layers**: Check `rootVariantVisuals` and `traversedFrames` from the extraction output. If the root variant has fills/effects or any traversed frame has fills/strokes/effects, insert synthetic elements (`isSynthetic: true`) at the start of the array and re-index. See `anatomy/agent-anatomy-instruction.md` sub-step 1b for the full procedure.
 
-4. **Rewrite** the `notes` field for each element with semantic descriptions following the instruction file's note-writing guidelines. The extraction script produces generic notes (`"X instance"`, `"Container with N children"`, etc.) — replace these with role-based descriptions that explain each element's purpose. Use `controlledByBoolean.propName` for boolean-controlled notes, `classification` for role identification, and `childVariantCount` / `childVariantAxes` for variant context.
+3. **Set unhide strategy** for hidden elements per the instruction file's Property-Aware Unhide Decisions section.
 
-4b. **Integrate user-provided design context**: If the user provided design notes, behavioral descriptions, or usage constraints alongside the Figma link, incorporate them into the relevant elements' notes. Usage rules (e.g., "do not mix different button variants") should appear in parent-level composition notes. Behavioral context (e.g., "supports single select and multi select") should appear on the element that controls that behavior. Architectural context (e.g., "uses composable slot pattern in code") should appear on slot or container elements. Do not add user context as standalone text — weave it into the semantic notes.
+3b. **Detect concentric layout**: If all elements' Y-centers cluster within 20 px, compute spread `lineY` values across the shared vertical range and set on each element. This gives the rendering script distinct Y-positions for marker lines. See `anatomy/agent-anatomy-instruction.md` for the full algorithm.
 
-5. **Deduplicate repeated composition elements**: When multiple consecutive elements share the same `mainComponentSetId` (i.e., they are all instances of the same sub-component), collapse them into a single representative element with a `count` field. The first element is kept; subsequent duplicates are removed from the array. The representative element's name gets an `(xN)` suffix in the table, and its notes should explain the repeated pattern (e.g., "Button group (sub components) sub-component — individual button item, repeated per option (x4)"). This mirrors the per-child grouping logic in Step 8b but applies at the composition level.
+4. **Rewrite** the `notes` field for each element following the instruction file's note-writing guidelines.
 
-6. **Validate** using the instruction file's checklist — ensure no generic notes remain, all hidden elements have unhide strategies, and all `instance`/`instance-unwrapped` elements have `shouldCreateSection` set. Do NOT add cross-references ("See X anatomy section") yet — those are appended after Step 8b confirms which sections were actually created.
+4b. **Integrate user-provided design context** into notes per the instruction file's guidelines.
 
-The enriched `elements` array (with updated `notes`, `unhideStrategy`, and `count` fields — all other fields come from extraction) is used by all subsequent rendering steps.
+5. **Deduplicate repeated composition elements**: When multiple consecutive elements share the same `mainComponentSetId`, collapse them into a single representative element with a `count` field. The first element is kept; subsequent duplicates are removed from the array. The representative element's name gets an `(xN)` suffix in the table. Write notes for deduplicated elements per the instruction file's "Repeated composition elements" guidelines.
+
+6. **Validate** using the instruction file's checklist.
+
+The enriched `elements` array (with updated `notes`, `unhideStrategy`, `count`, and `isSynthetic` fields, plus any synthetic elements inserted for skipped visual layers) is used by all subsequent rendering steps.
 
 ### Step 5: Navigate to Destination
 
@@ -434,18 +484,15 @@ const textNodes = frame.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  const len = tn.characters ? tn.characters.length : 0;
-  if (len > 0) {
-    try {
-      const fonts = tn.getRangeAllFontNames(0, len);
-      for (const f of fonts) {
-        const key = f.family + '|' + f.style;
-        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
-      }
-    } catch {}
-  }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+    }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const compNameFrame = frame.findOne(n => n.name === '#comp-name-anatomy');
 if (compNameFrame) {
@@ -486,15 +533,16 @@ Save the returned `compositionSectionId` — you need it for Step 8.
 
 ### Step 8: Build Composition Artwork with Markers + Fill Table
 
-Run via `figma_execute`. Replace `__COMPOSITION_SECTION_ID__`, `__COMP_SET_NODE_ID__`, `__IS_COMPONENT_SET__`, the `elements` array, `__BOOLEAN_UNHIDES_JSON__`, and `__FONT_FAMILY__` (from `uspecs.config.json`, default: `Inter`) with the enriched data from Step 4. Use the `compositionSectionId` from Step 7 to scope lookups. `__BOOLEAN_UNHIDES_JSON__` is an array of `{ booleanRawKey }` objects from elements whose `unhideStrategy.method === 'boolean'` — these booleans are toggled via `setProperties` instead of direct unhide. Pass `[]` if no boolean-controlled hidden elements exist.
+Run via `figma_execute`. Replace `__COMPOSITION_SECTION_ID__`, `__COMP_SET_NODE_ID__`, `__SELECTED_VARIANT_ID__`, `__IS_COMPONENT_SET__`, the `elements` array, `__BOOLEAN_UNHIDES_JSON__`, and `__FONT_FAMILY__` (from `uspecs.config.json`, default: `Inter`) with the enriched data from Step 4. Use the `compositionSectionId` from Step 7 to scope lookups. `__SELECTED_VARIANT_ID__` is the `selectedVariantId` returned by Step 3 — it may differ from the default variant. `__BOOLEAN_UNHIDES_JSON__` is an array of `{ booleanRawKey }` objects from elements whose `unhideStrategy.method === 'boolean'` — these booleans are toggled via `setProperties` instead of direct unhide. Pass `[]` if no boolean-controlled hidden elements exist.
 
-**Artwork** (`#preview`): Place a component instance with hidden children made visible via property-aware unhide, then clone `#marker-example` for each element with connecting lines.
+**Artwork** (`#preview`): Place a component instance with hidden children made visible via property-aware unhide, then clone `#marker-example` for each element with connecting lines. The `elements` array may contain synthetic elements (`isSynthetic: true`) inserted by Step 4 — these use their extraction-time bboxes directly and are skipped during the child-index-to-bbox re-computation loop.
 
 **Table** (`#annotation-table`): Clone the template `row` for each element, filling 4 cells: `#number`, `#indicator` (show one of `#instance` / `#text` / `#slot`, hide the other two), `#element-name`, `#notes`.
 
 ```javascript
 const COMPOSITION_SECTION_ID = '__COMPOSITION_SECTION_ID__';
 const COMP_SET_ID = '__COMP_SET_NODE_ID__';
+const SELECTED_VARIANT_ID = '__SELECTED_VARIANT_ID__';
 const IS_COMPONENT_SET = __IS_COMPONENT_SET__;
 const MARKER_COLOR = { r: 0.922, g: 0, b: 0.431 };
 
@@ -512,9 +560,8 @@ const PADDING = 80;
 const MIN_W = 1400;
 const MIN_H = 290;
 
-const compNode = await figma.getNodeByIdAsync(COMP_SET_ID);
-const defaultVariant = IS_COMPONENT_SET ? (compNode.defaultVariant || compNode.children[0]) : compNode;
-const compInstance = defaultVariant.createInstance();
+const selectedVariant = await figma.getNodeByIdAsync(SELECTED_VARIANT_ID);
+const compInstance = selectedVariant.createInstance();
 
 const rootW = Math.round(compInstance.width);
 const rootH = Math.round(compInstance.height);
@@ -583,9 +630,12 @@ if (childContainer === compInstance && childContainer.children.length > 1) {
   }
 }
 
+const syntheticCount = elements.filter(el => el.isSynthetic).length;
+let childIdx = 0;
 for (let i = 0; i < elements.length; i++) {
   const el = elements[i];
-  const match = childContainer.children[i];
+  if (el.isSynthetic) continue;
+  const match = childContainer.children[childIdx];
   if (match) {
     const absX = match.absoluteTransform[0][2];
     const absY = match.absoluteTransform[1][2];
@@ -596,24 +646,37 @@ for (let i = 0; i < elements.length; i++) {
       h: Math.round(match.height)
     };
   }
+  childIdx++;
 }
 
 const LINE_WIDTH = 1;
 
+// Detect layout pattern: concentric (overlapping centers) vs vertical stack vs mixed
 const xCenters = elements.map(el => el.bbox.x + el.bbox.w / 2);
-const X_THRESHOLD = 20;
-let useLeftStagger = false;
-if (elements.length >= 2) {
-  const centerCounts = {};
-  for (const cx of xCenters) {
-    const bucket = Math.round(cx / X_THRESHOLD) * X_THRESHOLD;
-    centerCounts[bucket] = (centerCounts[bucket] || 0) + 1;
-  }
-  const maxGroup = Math.max(...Object.values(centerCounts));
-  useLeftStagger = maxGroup / elements.length > 0.5;
+const yCenters = elements.map(el => el.bbox.y + el.bbox.h / 2);
+const CLUSTER_THRESHOLD = 20;
+
+function isClustered(values) {
+  if (values.length < 2) return true;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  return (max - min) <= CLUSTER_THRESHOLD;
+}
+
+const xClustered = isClustered(xCenters);
+const yClustered = isClustered(yCenters);
+const isConcentric = xClustered && yClustered;
+
+// Concentric → clockwise placement; vertical stack with shared x → left stagger; else → alternating
+let markerStrategy = 'alternating';
+if (isConcentric) {
+  markerStrategy = 'clockwise';
+} else if (xClustered && !yClustered) {
+  markerStrategy = 'leftStagger';
 }
 
 const STAGGER_STEP = MARKER_SIZE + 12;
+const CLOCKWISE_SIDES = ['left', 'top', 'right', 'bottom'];
 
 for (const el of elements) {
   const outline = figma.createRectangle();
@@ -634,6 +697,7 @@ for (const el of elements) {
   const elTopY = compY + el.bbox.y;
   const elBottomY = compY + el.bbox.y + el.bbox.h;
   const elLeftX = compX + el.bbox.x;
+  const elRightX = compX + el.bbox.x + el.bbox.w;
 
   const dot = markerExample.clone();
   preview.appendChild(dot);
@@ -644,35 +708,53 @@ for (const el of elements) {
 
   let dotX, dotY, lineStartX, lineStartY, lineEndX, lineEndY;
 
-  if (useLeftStagger) {
+  if (markerStrategy === 'clockwise') {
+    const side = CLOCKWISE_SIDES[(el.index - 1) % 4];
+    if (side === 'left') {
+      dotX = compX - MARKER_OFFSET - MARKER_SIZE;
+      dotY = elCenterY - MARKER_SIZE / 2;
+      lineStartX = dotX + MARKER_SIZE; lineStartY = elCenterY;
+      lineEndX = elLeftX; lineEndY = elCenterY;
+    } else if (side === 'top') {
+      dotX = elCenterX - MARKER_SIZE / 2;
+      dotY = compY - MARKER_OFFSET - MARKER_SIZE;
+      lineStartX = elCenterX; lineStartY = dotY + MARKER_SIZE;
+      lineEndX = elCenterX; lineEndY = elTopY;
+    } else if (side === 'right') {
+      dotX = compX + Math.round(compInstance.width) + MARKER_OFFSET;
+      dotY = elCenterY - MARKER_SIZE / 2;
+      lineStartX = dotX; lineStartY = elCenterY;
+      lineEndX = elRightX; lineEndY = elCenterY;
+    } else {
+      dotX = elCenterX - MARKER_SIZE / 2;
+      dotY = elBottomY + MARKER_OFFSET;
+      lineStartX = elCenterX; lineStartY = elBottomY;
+      lineEndX = elCenterX; lineEndY = dotY;
+    }
+  } else if (markerStrategy === 'leftStagger') {
     const staggerX = compX - MARKER_OFFSET - MARKER_SIZE - (el.index - 1) * STAGGER_STEP;
     dotX = staggerX;
-    dotY = elCenterY - MARKER_SIZE / 2;
-    lineStartX = dotX + MARKER_SIZE;
-    lineStartY = elCenterY;
-    lineEndX = elLeftX;
-    lineEndY = elCenterY;
-  } else if (el.index === 1) {
-    dotX = compX - MARKER_OFFSET - MARKER_SIZE;
-    dotY = elCenterY - MARKER_SIZE / 2;
-    lineStartX = dotX + MARKER_SIZE;
-    lineStartY = elCenterY;
-    lineEndX = elLeftX;
-    lineEndY = elCenterY;
-  } else if (el.index % 2 === 0) {
-    dotX = elCenterX - MARKER_SIZE / 2;
-    dotY = compY - MARKER_OFFSET - MARKER_SIZE;
-    lineStartX = elCenterX;
-    lineStartY = dotY + MARKER_SIZE;
-    lineEndX = elCenterX;
-    lineEndY = elTopY;
+    const lineY = (el.lineY != null) ? (compY + el.lineY) : elCenterY;
+    dotY = lineY - MARKER_SIZE / 2;
+    lineStartX = dotX + MARKER_SIZE; lineStartY = lineY;
+    lineEndX = elLeftX; lineEndY = lineY;
   } else {
-    dotX = elCenterX - MARKER_SIZE / 2;
-    dotY = elBottomY + MARKER_OFFSET;
-    lineStartX = elCenterX;
-    lineStartY = elBottomY;
-    lineEndX = elCenterX;
-    lineEndY = dotY;
+    if (el.index === 1) {
+      dotX = compX - MARKER_OFFSET - MARKER_SIZE;
+      dotY = elCenterY - MARKER_SIZE / 2;
+      lineStartX = dotX + MARKER_SIZE; lineStartY = elCenterY;
+      lineEndX = elLeftX; lineEndY = elCenterY;
+    } else if (el.index % 2 === 0) {
+      dotX = elCenterX - MARKER_SIZE / 2;
+      dotY = compY - MARKER_OFFSET - MARKER_SIZE;
+      lineStartX = elCenterX; lineStartY = dotY + MARKER_SIZE;
+      lineEndX = elCenterX; lineEndY = elTopY;
+    } else {
+      dotX = elCenterX - MARKER_SIZE / 2;
+      dotY = elBottomY + MARKER_OFFSET;
+      lineStartX = elCenterX; lineStartY = elBottomY;
+      lineEndX = elCenterX; lineEndY = dotY;
+    }
   }
 
   dot.x = Math.round(dotX);
@@ -794,18 +876,15 @@ const textNodes = childSection.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  const len = tn.characters ? tn.characters.length : 0;
-  if (len > 0) {
-    try {
-      const fonts = tn.getRangeAllFontNames(0, len);
-      for (const f of fonts) {
-        const key = f.family + '|' + f.style;
-        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
-      }
-    } catch {}
-  }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+    }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const sectionFrame = childSection.findOne(n => n.name === '#section-name');
 if (sectionFrame) {
@@ -1013,19 +1092,29 @@ for (const el of gcElementsGrouped) {
 const LINE_WIDTH = 1;
 
 const xCenters = gcElementsGrouped.map(el => el.bbox.x + el.bbox.w / 2);
-const X_THRESHOLD = 20;
-let useLeftStagger = false;
-if (gcElementsGrouped.length >= 2) {
-  const centerCounts = {};
-  for (const cx of xCenters) {
-    const bucket = Math.round(cx / X_THRESHOLD) * X_THRESHOLD;
-    centerCounts[bucket] = (centerCounts[bucket] || 0) + 1;
-  }
-  const maxGroup = Math.max(...Object.values(centerCounts));
-  useLeftStagger = maxGroup / gcElementsGrouped.length > 0.5;
+const yCenters = gcElementsGrouped.map(el => el.bbox.y + el.bbox.h / 2);
+const CLUSTER_THRESHOLD = 20;
+
+function isClustered(values) {
+  if (values.length < 2) return true;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  return (max - min) <= CLUSTER_THRESHOLD;
+}
+
+const xClustered = isClustered(xCenters);
+const yClustered = isClustered(yCenters);
+const isConcentric = xClustered && yClustered;
+
+let markerStrategy = 'alternating';
+if (isConcentric) {
+  markerStrategy = 'clockwise';
+} else if (xClustered && !yClustered) {
+  markerStrategy = 'leftStagger';
 }
 
 const STAGGER_STEP = MARKER_SIZE + 12;
+const CLOCKWISE_SIDES = ['left', 'top', 'right', 'bottom'];
 
 for (const el of gcElementsGrouped) {
   const outline = figma.createRectangle();
@@ -1046,6 +1135,7 @@ for (const el of gcElementsGrouped) {
   const elTopY = compY + el.bbox.y;
   const elBottomY = compY + el.bbox.y + el.bbox.h;
   const elLeftX = compX + el.bbox.x;
+  const elRightX = compX + el.bbox.x + el.bbox.w;
 
   const dot = markerExample.clone();
   preview.appendChild(dot);
@@ -1056,35 +1146,53 @@ for (const el of gcElementsGrouped) {
 
   let dotX, dotY, lineStartX, lineStartY, lineEndX, lineEndY;
 
-  if (useLeftStagger) {
+  if (markerStrategy === 'clockwise') {
+    const side = CLOCKWISE_SIDES[(el.index - 1) % 4];
+    if (side === 'left') {
+      dotX = compX - MARKER_OFFSET - MARKER_SIZE;
+      dotY = elCenterY - MARKER_SIZE / 2;
+      lineStartX = dotX + MARKER_SIZE; lineStartY = elCenterY;
+      lineEndX = elLeftX; lineEndY = elCenterY;
+    } else if (side === 'top') {
+      dotX = elCenterX - MARKER_SIZE / 2;
+      dotY = compY - MARKER_OFFSET - MARKER_SIZE;
+      lineStartX = elCenterX; lineStartY = dotY + MARKER_SIZE;
+      lineEndX = elCenterX; lineEndY = elTopY;
+    } else if (side === 'right') {
+      dotX = compX + Math.round(compInstance.width) + MARKER_OFFSET;
+      dotY = elCenterY - MARKER_SIZE / 2;
+      lineStartX = dotX; lineStartY = elCenterY;
+      lineEndX = elRightX; lineEndY = elCenterY;
+    } else {
+      dotX = elCenterX - MARKER_SIZE / 2;
+      dotY = elBottomY + MARKER_OFFSET;
+      lineStartX = elCenterX; lineStartY = elBottomY;
+      lineEndX = elCenterX; lineEndY = dotY;
+    }
+  } else if (markerStrategy === 'leftStagger') {
     const staggerX = compX - MARKER_OFFSET - MARKER_SIZE - (el.index - 1) * STAGGER_STEP;
     dotX = staggerX;
-    dotY = elCenterY - MARKER_SIZE / 2;
-    lineStartX = dotX + MARKER_SIZE;
-    lineStartY = elCenterY;
-    lineEndX = elLeftX;
-    lineEndY = elCenterY;
-  } else if (el.index === 1) {
-    dotX = compX - MARKER_OFFSET - MARKER_SIZE;
-    dotY = elCenterY - MARKER_SIZE / 2;
-    lineStartX = dotX + MARKER_SIZE;
-    lineStartY = elCenterY;
-    lineEndX = elLeftX;
-    lineEndY = elCenterY;
-  } else if (el.index % 2 === 0) {
-    dotX = elCenterX - MARKER_SIZE / 2;
-    dotY = compY - MARKER_OFFSET - MARKER_SIZE;
-    lineStartX = elCenterX;
-    lineStartY = dotY + MARKER_SIZE;
-    lineEndX = elCenterX;
-    lineEndY = elTopY;
+    const lineY = (el.lineY != null) ? (compY + el.lineY) : elCenterY;
+    dotY = lineY - MARKER_SIZE / 2;
+    lineStartX = dotX + MARKER_SIZE; lineStartY = lineY;
+    lineEndX = elLeftX; lineEndY = lineY;
   } else {
-    dotX = elCenterX - MARKER_SIZE / 2;
-    dotY = elBottomY + MARKER_OFFSET;
-    lineStartX = elCenterX;
-    lineStartY = elBottomY;
-    lineEndX = elCenterX;
-    lineEndY = dotY;
+    if (el.index === 1) {
+      dotX = compX - MARKER_OFFSET - MARKER_SIZE;
+      dotY = elCenterY - MARKER_SIZE / 2;
+      lineStartX = dotX + MARKER_SIZE; lineStartY = elCenterY;
+      lineEndX = elLeftX; lineEndY = elCenterY;
+    } else if (el.index % 2 === 0) {
+      dotX = elCenterX - MARKER_SIZE / 2;
+      dotY = compY - MARKER_OFFSET - MARKER_SIZE;
+      lineStartX = elCenterX; lineStartY = dotY + MARKER_SIZE;
+      lineEndX = elCenterX; lineEndY = elTopY;
+    } else {
+      dotX = elCenterX - MARKER_SIZE / 2;
+      dotY = elBottomY + MARKER_OFFSET;
+      lineStartX = elCenterX; lineStartY = elBottomY;
+      lineEndX = elCenterX; lineEndY = dotY;
+    }
   }
 
   dot.x = Math.round(dotX);
@@ -1174,7 +1282,7 @@ return { success: true, childSectionId: childSection.id, childName: CHILD_NAME, 
 
 Save each returned `childSectionId` and `groupedElements` array (which includes `count` for grouped siblings).
 
-**Enrich per-child notes (AI reasoning):** The script above produces generic notes for `groupedElements` (e.g., `"Label instance"`, `"Contains 3 elements"`). After each `figma_execute` returns, apply the same reasoning process as Step 4 — read the note-writing guidelines from `anatomy/agent-anatomy-instruction.md` and rewrite each element's `notes` with semantic descriptions. When an element has `count > 1`, the note should mention the count and explain the pattern (e.g., "Tag sub-component — category label slot (8 instances in this layout)"). Then run a lightweight `figma_execute` to update the table text:
+**Enrich per-child notes (AI reasoning):** The script above produces generic notes for `groupedElements` (e.g., `"Label instance"`, `"Contains 3 elements"`). After each `figma_execute` returns, apply the same reasoning process as Step 4 — read the note-writing guidelines from `anatomy/agent-anatomy-instruction.md` and rewrite each element's `notes` with semantic descriptions. Then run a lightweight `figma_execute` to update the table text:
 
 ```javascript
 const CHILD_SECTION_ID = '__CHILD_SECTION_ID__';
@@ -1188,18 +1296,15 @@ const textNodes = annotationTable.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  const len = tn.characters ? tn.characters.length : 0;
-  if (len > 0) {
-    try {
-      const fonts = tn.getRangeAllFontNames(0, len);
-      for (const f of fonts) {
-        const key = f.family + '|' + f.style;
-        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
-      }
-    } catch {}
-  }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+    }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 for (const el of ENRICHED_ELEMENTS) {
   const row = rows.find(r => r.name === 'Row ' + el.index);
@@ -1235,28 +1340,3 @@ After all per-child sections are processed, update the composition table's `#not
    - Per-child section titles use designer-facing names
 3. If issues are found, fix via `figma_execute` and re-capture (up to 3 iterations)
 
-## Notes
-
-These notes document non-obvious behaviors, gotchas, and cross-step coordination that the step prose alone does not capture.
-
-- The target node can be either a `COMPONENT_SET` or a standalone `COMPONENT`. When standalone, it is treated as its own default variant — `createInstance()` is called directly on it, and there are no variant axes.
-- **Hidden children are included** in extraction because they represent toggleable boolean properties. They are made visible on the artwork instance so markers point to visible elements, but labeled "(hidden)" in the table.
-- **Wrapper traversal** (Step 3 + Step 8 + Step 8b): Scripts traverse through single-child auto-layout wrappers, single-child SLOT wrappers, and a fallback for `[Background RECT, Content auto-layout FRAME]` patterns. This logic is duplicated in three places — extraction, composition artwork, and per-child artwork — and must stay in sync.
-- **Marker positioning**: Default mode places #1 left, evens above, odds below. Left-stagger mode (auto-detected when >50% of children share the same X center) places all markers left at staggered X positions. The mode decision uses the element's actual bbox, not the component container edge.
-- Step 7 **hides** the original `#anatomy-section` after cloning. This is critical — without it, placeholder text appears in screenshots. The property skill re-shows it if it needs additional clones.
-- **4-column table with 3-type indicator**: `#indicator` contains `#instance` (diamond), `#text` (T), and `#slot` (slot icon) sub-frames — show one, hide the other two. For FRAME/container/structural types, hide all three.
-- **Property-aware unhide** (Step 8 + 8b): Boolean-controlled elements are toggled via `setProperties`, not blanket `recursiveUnhide`, to avoid showing mutually exclusive states simultaneously. In Step 8b, the child's own `componentPropertyDefinitions` booleans are toggled before a `directUnhide` pass catches remaining hidden elements.
-- **Index-based child matching** (Step 8): Bounding boxes are refreshed by array index (`childContainer.children[i]`), not by name. This avoids failures with duplicate element names.
-- **Marker visibility gotcha**: Step 8 sets `markerExample.visible = false` after composition markers. Step 8b clones from the same `#marker-example`, so each clone must explicitly set `dot.visible = true`.
-- **Simplified notes**: The anatomy skill produces semantic role-based descriptions only — no colors, tokens, typography, or dimensions. Those are handled by the dedicated color, structure, and API skills.
-- **Deep leaf resolution** (Step 8b): `resolveLeafElements` walks past wrapper FRAMEs (up to 4 levels) to annotate meaningful leaves. Single-child wrappers inherit the parent FRAME's name; multi-child wrappers extract each child separately.
-- **SLOT node traversal** (Step 3 + Step 8 + Step 8b): Figma's SLOT type is used in composable components where child components are inserted via slots in code. The `childContainer` / `grandchildContainer` traversal walks through SLOT nodes the same way it walks through single-child auto-layout FRAMEs. A SLOT that appears as a direct child element is classified as `slot` and uses the `#slot` indicator in the table. When the SLOT is the only child of a variant (single-child wrapper pattern), it is traversed through to reach the actual content children.
-- **Deterministic classification** (Step 3): The extraction script classifies every element into a closed enum (`instance`, `instance-unwrapped`, `text`, `slot`, `container`, `structural`) at extraction time. The AI does not reclassify — it validates and writes notes. This follows the principle: classify structurally at extraction time, not heuristically at consumption time.
-- **Instance-wrapper FRAME unwrapping** (Step 3): A FRAME/GROUP whose subtree resolves to exactly one INSTANCE descendant (through single-child wrapper nesting, via `walkToInnerInstance`) is classified as `instance-unwrapped` and unwrapped in the extraction script itself — `name` is replaced with the inner sub-component's `componentSetName`, `nodeType` is set to `'INSTANCE'`, and `originalName` preserves the FRAME name. The `wrappedInstance` field is retained so Step 8b can use `wrappedInstance.mainComponentSetId` / `wrappedInstance.mainComponentId` as `CHILD_COMP_ID`. The `bbox` stays unchanged so the marker points to the FRAME's visible area.
-- **Boolean binding by index** (Step 3): Boolean properties are resolved to their controlling element by walking `variant.componentProperties`, extracting the node ID suffix, looking up the layer node, and matching it to elements by name (with `originalName` fallback for unwrapped elements). A name-matching fallback (`booleanProps[].name` vs `element.originalName || element.name`, case-insensitive) catches cases where node ID resolution fails. The result is `controlledByBoolean: { propName, rawKey, defaultValue }` on each bound element — no AI name-matching needed.
-- **Child section eligibility** (Step 3 → Step 8b): The extraction script sets `shouldCreateSection: true` on every `instance` and `instance-unwrapped` element, except those matching utility names (Spacer, Divider, etc.). All other classifications (`text`, `slot`, `container`, `structural`) default to `false`. The runtime `gcElementsGrouped.length <= 1` guard in Step 8b is the final safety net.
-- **Richest-variant fallback** (Step 8b): When a child component set's default variant has 1 or fewer direct children, the script iterates all variants and picks the one with the most direct children. This ensures variant-rich slot components get a meaningful anatomy section rather than being trivially skipped.
-- **Composition-level deduplication** (Step 4): When multiple composition elements are instances of the same component set (`mainComponentSetId`), they are collapsed into one representative element with a `count` field during Step 4 enrichment. This prevents redundant markers, outlines, and table rows for repeated identical children (e.g., 4 buttons in a button group). The representative uses `(xN)` suffix and a note explaining the pattern.
-- **Repeated sibling grouping** (Step 8b): Consecutive elements with the same `name`, `nodeType`, and `resolvedCompKey` (component set/component ID for INSTANCEs, element name for other types) are collapsed into one entry with a `count` field — one outline, one marker, one table row per group, with `(xN)` suffix in the name column.
-- **Cross-reference timing**: Cross-refs ("See X anatomy section") are NOT written during Step 4 note enrichment. They are appended to the composition table after all Step 8b sections are processed, once the agent knows which sections were actually created vs. skipped.
-- **Pink dashed outlines**: Both composition (Step 8) and per-child (Step 8b) sections draw dashed pink rectangles (`dashPattern = [4, 4]`, `MARKER_COLOR`) around each annotated element.

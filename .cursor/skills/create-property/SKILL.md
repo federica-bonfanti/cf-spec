@@ -16,7 +16,7 @@ Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for ever
 | Verify connection | `figma_get_status` | Skip — implicit. If first `use_figma` call fails, guide user to check MCP setup. |
 | Navigate to file | `figma_navigate` with URL | Extract `fileKey` from URL (`figma.com/design/:fileKey/...`). No navigate needed. |
 | Take screenshot | `figma_take_screenshot` | `get_screenshot` with `fileKey` + `nodeId` |
-| Execute Plugin JS | `figma_execute` with `code` | `use_figma` with `fileKey`, `code`, `description`. **Core logic is identical** but some node methods must be replaced — see method restrictions below. |
+| Execute Plugin JS | `figma_execute` with `code` | `use_figma` with `fileKey`, `code`, `description`. **Core logic is identical** — see font loading note below for the one API difference (`getRangeAllFontNames` → `tn.fontName`). |
 | Search components | `figma_search_components` | `search_design_system` with `query` + `fileKey` + `includeComponents: true` |
 | Get file/component data | `figma_get_file_data` / `figma_get_component` | `get_metadata` or `get_design_context` with `fileKey` + `nodeId` |
 | Get variables (file-wide) | `figma_get_variables` | `use_figma` script: `return await figma.variables.getLocalVariableCollectionsAsync();` |
@@ -26,7 +26,7 @@ Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for ever
 
 **`figma-mcp` requires `fileKey` on every call.** Extract it once from the user's Figma URL at the start of the workflow. For branch URLs (`figma.com/design/:fileKey/branch/:branchKey/:fileName`), use `:branchKey` as the fileKey.
 
-**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, descendant nodes (text, instances) may not be fully loaded. Insert this page-loading block at the **start** of every script that references a previously-created node:
+**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, the page content may not be loaded — `findAll`, `findOne`, and `characters` will fail with `TypeError` until the page is activated. Insert this page-loading block at the **start** of every script that references a previously-created node:
 
 ```javascript
 const pages = figma.root.children;
@@ -36,53 +36,28 @@ if (targetPage) await figma.setCurrentPageAsync(targetPage);
 
 Replace `__PAGE_NAME__` with the actual page name (determined during Step 5 when the template is placed). This loads the page content so child nodes are accessible.
 
-**`figma-mcp` method restrictions:** Even after page loading, the following methods consistently throw `TypeError` in `figma-mcp` and must **not** be used. The script templates in Steps 6–7 use `figma-console` syntax (`findAll`, `findOne`, `getRangeAllFontNames`). When using `figma-mcp`, replace them with these helpers:
+**`figma-mcp` font loading:** `getRangeAllFontNames` is not available in the `use_figma` sandbox and will throw `TypeError`. Replace it with `tn.fontName` (returns `{ family, style }` for single-font text, or `figma.mixed` for mixed-font text). `findAll` and `findOne` work normally after `setCurrentPageAsync` — they do not need replacement.
 
-| Broken method | Replacement |
-|---|---|
-| `node.findAll(fn)` | Use recursive `findAllText(node, [])` for text nodes, or a custom recursive walker for other predicates (see helpers below) |
-| `node.findOne(fn)` | Use recursive `findByName(node, name)` helper (below) |
-| `tn.getRangeAllFontNames(0, len)` | Use `tn.fontName` (returns `{ family, style }` for single-font text; wrap in try/catch for mixed-font text) |
-
-Include these two helpers at the top of every `figma-mcp` rendering script:
-
-```javascript
-function findByName(node, name) {
-  if (node.name === name) return node;
-  if ('children' in node) {
-    for (const child of node.children) {
-      const found = findByName(child, name);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-function findAllText(node, results) {
-  if (node.type === 'TEXT') results.push(node);
-  if ('children' in node) {
-    for (const child of node.children) findAllText(child, results);
-  }
-  return results;
-}
-```
-
-And replace the font-loading block in every script from:
+Replace the font-collection loop in every script from:
 ```javascript
 const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
+for (const f of fonts) {
+  const key = f.family + '|' + f.style;
+  if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+}
 ```
 to:
 ```javascript
 try {
   const fn = tn.fontName;
-  if (fn && typeof fn === 'object' && fn.family) {
+  if (fn && fn !== figma.mixed && fn.family) {
     const key = fn.family + '|' + fn.style;
     if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
   }
 } catch {}
 ```
 
-Console MCP does not need these replacements — `figma_execute` inherits the Desktop page context where `findAll`, `findOne`, and `getRangeAllFontNames` work natively.
+And add `.catch(() => {})` to the batch load: `await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));`
 
 ## Inputs Expected
 
@@ -795,15 +770,15 @@ const textNodes = frame.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const compNameFrame = frame.findOne(n => n.name === '#comp-name-anatomy');
 if (compNameFrame) {
@@ -856,15 +831,15 @@ const textNodes = chapter.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -981,15 +956,15 @@ const textNodes = chapter.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -1127,15 +1102,15 @@ const textNodes = chapter.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -1257,15 +1232,15 @@ const textNodes = chapter.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -1435,15 +1410,15 @@ const textNodes = chapter.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -1532,7 +1507,7 @@ const BASE_PROPS = __BASE_PROPS_JSON__;
 const DESCRIPTION = '__DESCRIPTION__';
 const FONT_FAMILY = '__FONT_FAMILY__';
 
-// ... page-loading block + findByName/findAllText helpers (see MCP Adapter) ...
+// ... page-loading block (see MCP Adapter) ...
 
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const subCompSet = await figma.getNodeByIdAsync(SUB_COMP_SET_ID);
@@ -1608,15 +1583,15 @@ const textNodes = chapter.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -1743,15 +1718,15 @@ const textNodes = chapter.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {

@@ -3,6 +3,55 @@ title: "Changelog"
 description: "Product updates and release history"
 ---
 
+<Update label="V1.6.0 — April 2026" description="Synthetic layer detection, clockwise markers, measurement annotation pause, and two-layer architecture">
+  ## uSpec V1.6.0
+
+  Anatomy now handles concentric components (checkbox, radio, toggle) with synthetic element detection and clockwise marker placement. Structure gains icon/component reference rows and temporarily removes measurement annotations until Figma MCP supports them natively. All seven skills follow a two-layer architecture separating orchestration from domain knowledge.
+
+  ### Measurement annotation paused (Structure)
+
+  - **Temporarily removed** measurement annotations (`TOKEN_MAPS`, `annotateNode`, and all native Figma `addMeasurement` calls) from the structure skill
+  - The `addMeasurement` API is not yet exposed through Figma MCP — annotations will return once native support is available
+  - Table-driven spec rows and token references are unaffected; only the visual measurement lines on preview instances are paused
+
+  ### Synthetic element detection (Anatomy)
+
+  - New `hasVisuals()` utility detects fills, strokes, and effects on any node — used to identify visually meaningful frames that wrapper traversal would otherwise skip
+  - `rootVariantVisuals` and `traversedFrames` are now returned by the extraction script, surfacing visual layers (statelayers, backplates, shape containers) that exist on the root variant or intermediate wrapper frames
+  - Step 4 inserts **synthetic elements** (`isSynthetic: true`) for skipped visual layers, with re-indexing — concentric components like checkbox now show all structural layers in the anatomy table
+  - Instruction file adds note-writing guidelines, worked examples, and validation checklist items for synthetic elements
+
+  ### Clockwise marker placement (Anatomy)
+
+  - Three marker placement strategies based on element center clustering: **clockwise** (concentric/overlapping), **left stagger** (vertical stack), and **alternating** (mixed layouts)
+  - Clockwise strategy rotates markers around the component (left → top → right → bottom) — ideal for concentric components where all elements share the same center
+  - Both composition and per-child artwork scripts use the same `isClustered` detection and strategy selection
+
+  ### Richest variant fallback (Anatomy)
+
+  - When the default variant produces 0 elements after wrapper traversal (e.g., an unchecked checkbox with an empty structure frame), extraction falls back to the variant with the most descendant children
+  - `selectedVariantId` is returned by extraction and reused by the rendering step, ensuring artwork matches the extraction data
+  - `resolveChildContainer` refactored into a reusable function shared by the fallback logic
+
+  ### Icon and component references (Structure)
+
+  - INSTANCE children now carry `parentSetName` — the component set name (e.g., `"checkmark"`, `"chevron-down"`) — at all tree depths, not just depth 0
+  - New `iconName` / `leadingIcon` / `trailingIcon` spec rows document which component is used, placed before the corresponding size row
+  - Instruction file adds a Component References section, decision-table entry, common-mistake warning, and validation checklist item
+
+  ### Two-layer skill architecture
+
+  - **SKILL.md** is now strictly the orchestration layer — step-by-step workflow, MCP adapter mapping, Plugin API scripts, script output contracts, intermediate data structures, and template mechanics
+  - **Instruction files** are now strictly the domain knowledge layer — interpretation guidance, decision frameworks, naming conventions, value formatting rules, worked examples, edge cases, and validation checklists
+  - Every skill retains its two-tier extraction model: deterministic scripts for data gathering, AI reasoning for interpretation and enrichment
+
+  ### Housekeeping
+
+  - Deleted `data-example.json` — no longer referenced by any skill
+  - Updated `api/api-library.md` with improved reference patterns
+  - Updated `implementation.md` with variant selection and marker positioning docs
+</Update>
+
 <Update label="V1.5.0 — March 2026" description="Composable slot support, blown-out rendering, and artwork label replacement">
   ## uSpec V1.5.0
 

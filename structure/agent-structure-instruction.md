@@ -46,10 +46,10 @@ This section is a reference for what the extraction scripts inspect and how. The
 | `figma_get_file_data` | Get component set structure, variant axes, property definitions | Component set node ID |
 | `figma_get_component` | Get detailed data for a specific variant instance | Instance node ID |
 | `figma_get_component_for_development` | Get component data with visual reference for dev handoff | Component node ID |
-| `figma_execute` | Run the extraction (Step 4b) and cross-variant (Step 4d) scripts, and render sections (Steps 9-11) | `code`: JS using Plugin API |
+| `figma_execute` | Run the extraction and cross-variant scripts, and render sections | `code`: JS using Plugin API |
 | `figma_get_variables` | Discover variable collections and modes (Density, Shape, Theme) | `fileUrl`, `format: "filtered"`, `namePattern` |
 
-**Important:** Do NOT write ad-hoc `figma_execute` queries to gather dimensional data. The extraction (Step 4b) and cross-variant (Step 4d) scripts collect all measurements deterministically. Use `figma_execute` only for the pre-written scripts in Steps 4b, 4d, 9, 10, 11b, and 11c.
+**Important:** Do NOT write ad-hoc `figma_execute` queries to gather dimensional data. The extraction and cross-variant scripts collect all measurements deterministically. Use `figma_execute` only for the pre-written scripts in the SKILL.md workflow.
 
 ### Figma Properties Reference
 
@@ -65,7 +65,7 @@ The extraction scripts access these properties internally. This reference helps 
 | Corner radius | `node.cornerRadius` (or per-corner when mixed) → collapsed to `topStart`/`topEnd`/`bottomStart`/`bottomEnd` |
 | Variable bindings | `node.boundVariables` → resolved to token names with `display` strings |
 | Typography | `textNode.textStyleId` → `typography.styleName`, or inline props → `typography.{ fontSize, fontWeight, ... }` |
-| Sub-components | `instance.getMainComponentAsync()` → `subCompSetId`, `subCompVariantAxes`, `booleanOverrides` |
+| Sub-components | `instance.getMainComponentAsync()` → `subCompSetId`, `subCompVariantAxes`, `booleanOverrides` (depth 0 only); `parentSetName` (all depths) |
 
 ### Identifying Variant Axes and Variable Modes
 
@@ -109,14 +109,6 @@ Look for `valuesByMode` in the response. If it has multiple mode values, those b
 }
 ```
 
-### Extracting Measurements
-
-Both the extraction script (Step 4b) and the cross-variant script (Step 4d) provide pre-formatted `display` strings on every dimensional property. Use `display` directly as table cell values:
-- Token-bound: `display` = `"token-name (resolved-value)"` (e.g., `"spacing-md (16)"`)
-- Hardcoded: `display` = `"value"` (e.g., `"16"`)
-
-Step 4b provides full `{ value, token, display }` tuples on variant root dimensions, children, enriched tree nodes, and sub-components. Step 4d provides the same format in `rootDimensions` and `subComponentDimensions` across all sizes. Both sources use identical formatting — table values can come from either.
-
 ### Collapsed/Expanded Dimensional Model
 
 The extraction script returns dimensions in a collapsed/expanded format. Use the shape of the data to determine which table rows to emit:
@@ -133,11 +125,6 @@ The extraction script returns dimensions in a collapsed/expanded format. Use the
 **Stroke weight:**
 - Uniform `strokeWeight: { value, token, display }` → emit one `borderWidth` row
 - Per-side `strokeWeight: { top, bottom, start, end }` → emit individual rows
-
-**Typography:**
-- Named style `typography: { styleName: "Heading/X Small" }` → emit one `textStyle` row with the style name
-- Inline `typography: { fontSize, fontWeight, lineHeight, ... }` → emit individual property rows
-- Never both — mutual exclusion enforced at extraction time
 
 ### Logical Direction Normalization
 
@@ -161,6 +148,7 @@ This ensures specs are RTL-aware by default. Use logical direction names (`paddi
 | **Corner radius** | Frame > Corner radius | `cornerRadius` (uniform) or `cornerRadiusTopStart`, `cornerRadiusTopEnd`, etc. (per-corner) |
 | **Stroke width** | Stroke > Weight | `borderWidth` (uniform) or per-side |
 | **Icon size** | Icon frame > W, H | `iconSize`, `leadingIconSize`, `trailingIconSize` |
+| **Icon/component reference** | INSTANCE child > `parentSetName` from extraction | `iconName`, `leadingIcon`, `trailingIcon` — use the component set name (e.g., `"checkmark"`), not the variant name |
 | **Clip content (overflow)** | Frame > Clip content toggle | `clipsContent` (`"true"` or `"false"`) |
 | **Layout direction** | Auto Layout > Direction | Note in description if relevant |
 | **Absolute position** | Frame > Constraints | Document offset values if pinned |
@@ -188,6 +176,10 @@ The extraction returns typography as a discriminated composite — never both a 
 
 The mutual exclusion is enforced at extraction time — you never need to decide which representation to use.
 
+### Component References (INSTANCE Identity)
+
+When a child node is an INSTANCE (e.g., an icon, badge, or illustration), the extraction captures `parentSetName` — the component set name (e.g., `"checkmark"`, `"chevron-down"`). Use this as the row value for `iconName` / `leadingIcon` / `trailingIcon` rows. Do not use `mainComponentName` (the variant name like `"Size=12, Theme=Filled"`). Place the reference row before the corresponding size row within the same group. If the INSTANCE child is absent in some variants, use `"–"` in those columns for both the reference and dimensional rows.
+
 ### Organizing into Sections
 
 When planning your sections:
@@ -213,7 +205,6 @@ Not all variants should be table columns. Use this framework:
 - **Columns work for:** Density (Compact/Default/Spacious) — same properties, different dp values
 - **Sections work for:** Configuration variants (with vs without trailing content) — different property sets
 - **Separate section for:** State that introduces new properties (e.g., selected state adds an inner border not present in default)
-- **Behavior axis in preview:** Behavior variant axis (e.g., Static vs Interactive) where variants look visibly different. Use just the default configuration (e.g., Static) for the preview — one row of instances at each size is sufficient. If a property like `borderWidth` differs between configurations, add it as a row in the table.
 
 ---
 
@@ -224,29 +215,22 @@ For sub-components like `leadingContent` that can contain buttons, switches, ico
 1. **Document slot-specific properties** — alignment, inner padding, spacing within the slot
 2. **Use references** — "See Button spec" or "See Icon spec" for nested component internals
 3. **Create a separate section** for each significant sub-component
-4. **Sub-component section previews show the sub-component directly** — not the parent. When a section documents a sub-component (e.g., Label), its preview creates instances from the sub-component's own component set. This shows four Label instances at different sizes, not four full Text Field instances. The sub-component's component set ID (`subCompSetId`) and boolean overrides (`booleanOverrides`) are pre-resolved by the enhanced extraction script (Step 4b) in the `subComponents` array — no separate exploration step needed.
+4. **Sub-component section previews show the sub-component directly** — not the parent. When a section documents a sub-component (e.g., Label), its preview creates instances from the sub-component's own component set. This shows four Label instances at different sizes, not four full Text Field instances. The sub-component's component set ID (`subCompSetId`) and boolean overrides (`booleanOverrides`) are pre-resolved by the extraction in the `subComponents` array — no separate exploration step needed.
 
 ### Sub-Component Discovery
 
-The enhanced extraction script (Step 4b) handles sub-component discovery automatically at **two levels**:
+The extraction handles sub-component discovery automatically. The `subComponents` array in the extraction output contains full data for each discovered sub-component:
 
-**Level 1 — Parent component toggles:** The extraction script reads `booleanDefs` from the parent's `propertyDefs`, creates a fully-enabled test instance (all parent booleans set to `true`), and extracts the complete `enrichedTree` with all gated sub-components visible.
-
-**Level 2 — Sub-component instance toggles:** For every INSTANCE child at depth 0 in the enriched tree, the extraction script reads `instance.componentProperties` for BOOLEAN entries and stores them as `booleanOverrides` on each sub-component entry. It also resolves `subCompSetId` (the sub-component's own component set ID) and `subCompVariantAxes` (the sub-component's own variant axes).
-
-**The `subComponents` array** in the extraction output contains full data for each discovered sub-component:
 - `name` — the instance name in the parent (e.g., "Label", "Input", "Hint text")
 - `mainComponentName` — the main component's name
 - `subCompSetId` — the sub-component's own component set ID (for preview sourcing)
 - `subCompVariantAxes` — the sub-component's own variant axes (e.g., Size: ["Large", "Medium", "Small"])
 - `booleanOverrides` — boolean properties that gate internal children (e.g., character count, status icons)
-- `dimensions` — the sub-component's own dimensional properties from the fully-enabled enriched tree (`{ value, token, display }` tuples)
-- `children` — recursive children with dimensions, matching the `extractChildren` format
+- `dimensions` — the sub-component's own dimensional properties (`{ value, token, display }` tuples)
+- `children` — recursive children with dimensions
 - `typography` — typography data if the sub-component is a TEXT node (or `null`)
 
-Step 4b provides sub-component dimensions from the enriched tree (fully-enabled state). Step 4d adds cross-variant measurements across all parent sizes. Both sources are available for section planning and row population.
-
-**Example:** A Label sub-component might have `booleanOverrides: { "Character count#12013:5": false, "Show icon#12013:0": false }`. The cross-variant script (Step 4d) enables all booleans and measures the sub-component's children across all parent sizes, so the `subComponentDimensions` data includes both the default and toggled-on children.
+The extraction provides sub-component dimensions from the fully-enabled enriched tree. The cross-variant data adds measurements across all parent sizes. Both sources are available for section planning and row population.
 
 No manual `figma_execute` calls are needed for sub-component discovery — the extraction and cross-variant scripts handle it deterministically.
 
@@ -345,6 +329,57 @@ Do **not** use this for states that simply change existing numeric property valu
 
 ---
 
+## Interpretation Quality Guidance
+
+The AI interpretation layer has complete, structured data from the extraction and cross-variant comparison. Instead of writing `figma_execute` queries, focus on high-value reasoning tasks that directly improve spec quality for engineers.
+
+### Design-Intent Notes
+
+For each property row, write notes that answer **"why this value?"** not just **"what is this property?"**. Use the full dimensional data across all variants and sub-components to identify scaling patterns.
+
+| Instead of this | Write this |
+|---|---|
+| "Tap target" | "Meets WCAG 2.5.8 minimum touch target (44px) with 12px optical margin" |
+| "Inset from edges" | "Accommodates multi-line secondary text at spacious density" |
+| "Pill shape" | "Uses half of minHeight — pill shape scales with container height" |
+| "Icon size" | "Matches platform icon grid (20dp Android, 20pt iOS)" |
+| "Gap between icon and label" | "Scales with size axis: 4→6→8→8 maintains optical balance at each size" |
+
+Use the cross-variant data to identify scaling patterns and explain them in notes.
+
+### Cross-Section Pattern Recognition
+
+After reviewing all sections together, identify and document:
+- **General notes** describing system-wide patterns: e.g., "All sub-components share the `spacing-inset-*` token family for horizontal padding, scaling from 12 (compact) to 20 (spacious)"
+- **Consistency observations** in section descriptions: e.g., "Leading and trailing content slots have identical minWidth and alignment — designed as symmetrical containers"
+- **Cross-references between sections** when one section's values explain another's: e.g., "Composition section shows Label uses `small` variant at XSmall parent size — this is why the Label section's XSmall column has different padding than other sizes"
+
+These observations go into `generalNotes` and `sectionDescription` fields.
+
+### Anomaly Detection
+
+Before generating structured data, scan the extraction and cross-variant data for:
+- **Scaling inconsistencies:** A sub-component whose minHeight doesn't scale with the parent's size axis — intentional or a design bug? Flag in notes.
+- **Token misconfiguration:** A token binding that resolves to the same value across all density modes — the token exists but doesn't differentiate. Note it.
+- **Asymmetric padding without explanation:** paddingStart=16, paddingEnd=12 — optical correction or mistake? If intentional, the note should explain why.
+- **Missing token bindings:** A hardcoded value surrounded by token-bound siblings — was the binding missed, or is it intentionally hardcoded? Flag for engineering awareness.
+- **Stroke/border state changes:** Compare `stateComparison` data — does a border appear, disappear, or change weight between states? Flag as a state-conditional section candidate if not already in the plan.
+
+Add anomaly notes to the relevant row's `notes` field or to `generalNotes` for component-wide issues.
+
+### Completeness Judgment
+
+Before proceeding to rendering, verify:
+- Does every auto-layout container in the extraction have its padding and spacing documented in a section row?
+- Does every sub-component discovered in the `enrichedTree` have its own section?
+- Are there dimensional properties present in `rootDimensions` or `subComponentDimensions` that were not included in any row?
+- For composition sections: does every sub-component's size mapping cover all parent sizes?
+- Are typography styles documented for every TEXT node in the enriched tree?
+
+If gaps exist that cannot be filled from the extraction data, add a note in `generalNotes`: e.g., "Trailing content slot dimensions not documented — slot was empty in all inspected variants."
+
+---
+
 ## Data Structure Reference
 
 *Use this structure to organize your analysis internally. The data is passed directly into Figma template placeholders — no JSON output is needed.*
@@ -425,7 +460,7 @@ Container          –      –      –     Tap target
 
 ## Value Formatting: Display Strings from Extraction
 
-The extraction script provides pre-formatted `display` strings on every `{ value, token, display }` tuple. Use `display` directly as table cell values — no manual formatting needed.
+Both the extraction and cross-variant data provide pre-formatted `display` strings on every `{ value, token, display }` tuple. Use `display` directly as table cell values — no manual formatting needed. Both sources use identical formatting, so table values can come from either.
 
 | Source | `display` value | Example |
 |--------|-----------------|---------|
@@ -467,7 +502,8 @@ The extraction script provides pre-formatted `display` strings on every `{ value
 | Shape (uniform) | `cornerRadius` | `"radius-md (8)"`, `"full"` |
 | Shape (per-corner) | `cornerRadiusTopStart`, `cornerRadiusTopEnd`, `cornerRadiusBottomStart`, `cornerRadiusBottomEnd` | `"radius-sm (4)"` |
 | Border (uniform) | `borderWidth` | `"1"` |
-| Icons | `iconSize`, `leadingIconSize`, `trailingIconSize` | `"icon-sm (16)"`, `"icon-md (20)"`, `"24"` |
+| Icons (size) | `iconSize`, `leadingIconSize`, `trailingIconSize` | `"icon-sm (16)"`, `"icon-md (20)"`, `"24"` |
+| Icons (reference) | `iconName`, `leadingIcon`, `trailingIcon` | `"checkmark"`, `"minus"`, `"chevron-down"` |
 | Slots | `slotWidth`, `slotMinWidth`, `slotMaxWidth` | `"24"`, `"sizing-avatar-sm (40)"` |
 | Typography (style) | `textStyle` | `"Heading/X Small"` |
 | Typography (inline) | `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing` | `"14"`, `"500"`, `"20"` |
@@ -508,9 +544,10 @@ The extraction script provides pre-formatted `display` strings on every `{ value
 - **Incomplete sections:** Not verifying that every auto-layout container and sub-component from the extraction has its own section or is covered by a parent section.
 - **Showing parent component in sub-component preview:** Sub-component section previews must show instances from the sub-component's own component set (`subComponents[].subCompSetId`), not the parent. A "Label" section should show four Label instances at different sizes, not four full Text Field instances.
 - **Overriding preview frame layout:** The `#Preview` frame's layout properties are defined by the template. Never override them.
-- **Missing border/stroke state changes:** Only checking whether a state adds entirely new properties, without checking if an existing border/stroke appears, disappears, or changes weight between states. The `stateComparison` data from Step 4d makes this visible.
+- **Missing border/stroke state changes:** Only checking whether a state adds entirely new properties, without checking if an existing border/stroke appears, disappears, or changes weight between states. The `stateComparison` data from the cross-variant comparison makes this visible.
 - **Measurement labels for constraints:** Min/max constraint labels must include the prefix: `"min 32"`, `"max 200"`. Padding and spacing measurements use Figma's default display (actual pixel values) with no custom labels.
 - **Extra annotations not in table:** Annotating properties that don't have a corresponding row in the section's table. Only draw measurements for properties documented in the table below — the token map gates which properties get annotated.
+- **Missing icon/component references:** Documenting `iconSize` without an `iconName` row. When an INSTANCE child represents an icon or component from a library, add a reference row using `parentSetName` (e.g., `"checkmark"`) before the size row. Use `"–"` in columns where the child is absent.
 
 ---
 
@@ -535,6 +572,8 @@ The extraction script provides pre-formatted `display` strings on every `{ value
 | Behavior/Configuration variant axis (e.g., Static vs Interactive) | Do variants look visually different (borders, strokes, optional elements)? | Use the default configuration for the preview. If dimensional values are identical, document once with a note. If border/stroke differs, add a row for it. |
 | Sub-component INSTANCE with its own boolean properties | Does `instance.componentProperties` have BOOLEAN entries? | Enable them all, inspect revealed children, document their dimensions in the sub-component's section |
 | State variant with different stroke/border visibility | Does the border appear/disappear or change weight between states? | Create a state-conditional section showing the border difference (e.g., "Tag — Interactive states") |
+| No size/density/shape axes, only functional axes (e.g., checked, expanded, on/off) | Are dimensions identical across all variants? | Still use variants as columns — shows intentional consistency. Never collapse to a single "Default" column. |
+| INSTANCE child (icon, badge, illustration) inside a container | Does `parentSetName` identify which component is used? Is it present in all variants? | Add an `iconName` row with `parentSetName`, then `iconSize`. Use `"–"` in columns where the child is absent. |
 
 ---
 
@@ -545,7 +584,7 @@ The extraction script provides pre-formatted `display` strings on every `{ value
 | Variant has no spacing differences | Skip that variant axis; only document meaningful differences |
 | Value is "auto" or "fill" | Document as `"auto"` or `"fill"` — these are valid dimensional values |
 | Spacing controlled by variable mode | Use mode names as columns (Compact/Default/Spacious); note in `generalNotes`: "Density controlled by variable mode" |
-| Same value across all variants | Still document in columns; shows intentional consistency |
+| Same value across all variants, or no dimension-affecting axes | Still document in columns — shows intentional consistency. Use the component's primary functional axis as columns if no size/density/shape axes exist (e.g., checked/unchecked, expanded/collapsed). Never collapse to a single "Default" column. |
 | Component has 5+ density/size variants | Document all; the template handles dynamic column count |
 | Sub-component has its own density variants | Reference sub-component's spec; don't duplicate its structure table |
 | Corner radius uses "full" for pill shape | Document as `"full"` with note: "Uses half of minHeight" |
@@ -625,6 +664,32 @@ General notes: "Density controlled by variable mode. All slot dimensions adapt a
 | slotMinWidth | 24 | 24 | 24 | Minimum; expands for content |
 | trailingPadding | 0 | 0 | spacing-trailing-spacious (4) | Extra padding at spacious |
 
+## Example: Component with Variant-Conditional Children (Checkbox)
+
+General notes: "The check component is the visual indicator only — typically not used standalone. Requires a label and is often nested within another component (e.g., ListItem). Dimensions are identical across all checked states and interaction states."
+
+### Check container section
+
+- Section name: "Check container"
+- Description: "Dimensions are constant across all checked states. The outer frame is the visible state layer (hover/pressed), not the tap target — the tap target is defined by the parent component."
+- Preview: All interaction states (rest, hover, pressed) across all checked variants (unchecked, checked, indeterminate) in a grid layout
+- Columns: Spec | unchecked | checked | indeterminate | Notes
+
+| Spec | unchecked | checked | indeterminate | Notes |
+|---|---|---|---|---|
+| State layer | – | – | – | Visible on hover and pressed |
+| ├─ width | 32 | 32 | 32 | Fixed state layer width |
+| ├─ height | 32 | 32 | 32 | Fixed state layer height |
+| └─ cornerRadius | 12 | 12 | 12 | Squircle shape clips the state layer fill |
+| Checkbox | – | – | – | Inner visual checkbox frame |
+| ├─ width | 16 | 16 | 16 | Standard checkbox visual size |
+| ├─ height | 16 | 16 | 16 | 1:1 square aspect ratio |
+| ├─ cornerRadius | 6 | 6 | 6 | ~37% of size — rounded but not pill |
+| └─ borderWidth | 1 | 1 | 1 | Visible border in all states |
+| Icon | – | – | – | Checkmark or minus glyph |
+| ├─ iconName | – | checkmark | minus | From Base Iconography library |
+| └─ iconSize | – | 12 | 12 | No icon when unchecked; 2px visual margin inside 16px box |
+
 ---
 
 ## Pre-Render Validation Checklist
@@ -635,8 +700,8 @@ Before rendering into Figma, verify:
 |-------|----------------|
 | ☐ **Variable modes checked** | Used `figma_get_variables` to check if any bound tokens have multiple mode values (Density, Theme, etc.) |
 | ☐ **Sub-components discovered** | The `subComponents` array from extraction includes all INSTANCE children found in the enriched tree (with all parent booleans enabled). Each has `subCompSetId`, `subCompVariantAxes`, and `booleanOverrides` pre-resolved. |
-| ☐ **Cross-variant data complete** | The cross-variant script (Step 4d) measured all sub-components across all size values. `subComponentDimensions` has entries for every sub-component at every size. |
-| ☐ **Section plan validated** | The AI interpretation layer (Step 6) built, validated, and adjusted the section plan. Every auto-layout container and sub-component is covered. |
+| ☐ **Cross-variant data complete** | The cross-variant comparison measured all sub-components across all size values. `subComponentDimensions` has entries for every sub-component at every size. |
+| ☐ **Section plan validated** | The AI interpretation layer built, validated, and adjusted the section plan. Every auto-layout container and sub-component is covered. |
 | ☐ **Design-intent notes** | Notes answer "why this value?" not just "what is this property?". Scaling patterns, WCAG compliance, optical corrections are explained. |
 | ☐ **Anomalies flagged** | Scaling inconsistencies, token misconfiguration, asymmetric padding, missing token bindings are noted in relevant rows or `generalNotes`. |
 | ☐ **Completeness judged** | All dimensional properties from extraction are covered. Gaps are noted in `generalNotes`. |
@@ -657,6 +722,7 @@ Before rendering into Figma, verify:
 | ☐ **Table-driven annotations only** | Measurement lines appear ONLY for properties that have a corresponding row in the section's table. No extra annotations for properties not documented in the table. Token maps gate which properties get annotated. |
 | ☐ **Composition section** | If component has 2+ sub-components with their own size variants, a composition section comes first |
 | ☐ **Behavior variant previews** | Default configuration only for the preview; border/stroke differences documented as table rows |
-| ☐ **State-conditional sections** | States that introduce new properties or change border/stroke have their own section (detected by `stateComparison` from Step 4d) |
+| ☐ **State-conditional sections** | States that introduce new properties or change border/stroke have their own section (detected by `stateComparison` from the cross-variant data) |
 | ☐ **Cross-section patterns** | `generalNotes` includes system-wide patterns (shared token families, symmetrical slot designs, density scaling strategies) |
+| ☐ **Component references documented** | INSTANCE children have an `iconName` row (using `parentSetName`) before the `iconSize` row. Absent children use `"–"`. |
 

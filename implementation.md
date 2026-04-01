@@ -89,14 +89,55 @@ Each skill has an **MCP Adapter** section at the top that maps operations to the
 
 ### Native MCP Page Context
 
-`use_figma` resets `figma.currentPage` to the first page on every call. In multi-step workflows where a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, descendant nodes (text, instances) may not be fully loaded — methods like `getRangeAllFontNames`, `findAll`, or `characters` can fail with `TypeError`. Insert this page-loading block immediately after `getNodeByIdAsync`:
+`use_figma` resets `figma.currentPage` to the first page on every call. In multi-step workflows where a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, the page content may not be loaded — `findAll`, `findOne`, and `characters` will fail with `TypeError` until the page is activated. Insert this page-loading block immediately after `getNodeByIdAsync`:
 
 ```javascript
 let _p = node; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
 if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
 ```
 
-This walks up to the PAGE ancestor and loads its content. Console MCP does not need this — `figma_execute` inherits the Desktop page context from `figma_navigate`.
+This walks up to the PAGE ancestor and loads its content. Once the page is loaded, `findAll`, `findOne`, and other traversal methods work normally. Console MCP does not need this — `figma_execute` inherits the Desktop page context from `figma_navigate`.
+
+### Font Loading in `use_figma`
+
+`getRangeAllFontNames` is **not available** in the `use_figma` sandbox and will throw `TypeError`. Use `tn.fontName` instead, which returns `{ family, style }` for uniformly-styled text or `figma.mixed` for mixed-font text.
+
+**Collecting fonts from existing text nodes** — use this pattern in all skills:
+
+```javascript
+const textNodes = frame.findAll(n => n.type === 'TEXT');
+const fontSet = new Set();
+const fontsToLoad = [];
+for (const tn of textNodes) {
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+    }
+  } catch {}
+}
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+```
+
+**Loading a font by family name** — font style names vary per file (`"SemiBold"` vs `"Semi Bold"`). Use `listAvailableFontsAsync` to discover exact style strings:
+
+```javascript
+async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
+  fallbackStyle = fallbackStyle || 'Regular';
+  const allFonts = await figma.listAvailableFontsAsync();
+  const familyFonts = allFonts.filter(f => f.fontName.family === family);
+  const match = familyFonts.find(f => f.fontName.style === preferredStyle);
+  if (match) { await figma.loadFontAsync(match.fontName); return match.fontName; }
+  const fallback = familyFonts.find(f => f.fontName.style === fallbackStyle);
+  if (fallback) { await figma.loadFontAsync(fallback.fontName); return fallback.fontName; }
+  if (familyFonts.length > 0) { await figma.loadFontAsync(familyFonts[0].fontName); return familyFonts[0].fontName; }
+  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  return { family: 'Inter', style: 'Regular' };
+}
+```
+
+See [Figma MCP server guide — text-style-patterns](https://github.com/figma/mcp-server-guide/blob/main/skills/figma-use/references/text-style-patterns.md) for the upstream reference.
 
 ### Console MCP Tools
 
@@ -201,7 +242,9 @@ All skills render directly in Figma via Plugin API JavaScript (`figma_execute` o
 
 **Variant matching (Anatomy/Property):** When creating component instances for a specific property value, the skill first attempts an exact match across all variant axes. If no exact match exists, it falls back to the best partial match.
 
-**Marker positioning (Anatomy):** After placing the component instance in the artwork, the skill re-reads actual child positions from the instance using `absoluteTransform` rather than relying on extraction-time positions.
+**Variant selection (Anatomy):** Step 3 uses the default variant for extraction. If the default variant produces 0 elements after wrapper traversal (e.g., an unchecked checkbox whose default state has an empty structure frame), the script falls back to the richest variant (most descendant children). The selected variant's ID is returned as `selectedVariantId` and reused by Step 8 for rendering, ensuring the artwork matches the extraction data.
+
+**Marker positioning (Anatomy):** After placing the component instance in the artwork, the skill re-reads actual child positions from the instance using `absoluteTransform` rather than relying on extraction-time positions. Marker placement uses three strategies based on element center clustering: **clockwise** (concentric/overlapping elements — left, top, right, bottom rotation), **left stagger** (vertically stacked elements sharing an x-center), or **alternating** (mixed layouts — first left, then alternating top/bottom).
 
 **Property extraction (Property):** `create-property` uses a two-tier extraction model. **Tier 1 (deterministic scripts):** Steps 3, 3a, 3c, and 3d are `figma_execute` scripts that extract properties, resolve variant-gated booleans, link controlling booleans to child components by node ID, and normalize the data (coupled axes, unified slot chapters, sibling boolean collapsing). **Tier 2 (AI reasoning):** Step 3b (variable mode search) requires AI judgment for collection matching, and Step 3e is a validation layer that cross-checks the deterministic output for semantic mismatches, structural anomalies, and combination count sanity before rendering.
 
@@ -221,9 +264,25 @@ All skills render directly in Figma via Plugin API JavaScript (`figma_execute` o
 | `create-structure` | Structure spec | Per-section dimensional tables with dynamic columns for size/density variants |
 | `create-motion` | Motion spec | Timeline bars with easing-colored segments (bar positions computed in Figma code), detail table from pre-computed segments |
 
-### Agent Instructions
+### Skill and Agent Instruction Architecture
 
-Each spec type has its own instruction file that defines the agent's behavior, data schema, and examples. See the Reference Files table at the bottom.
+Each skill has two layers:
+
+- **SKILL.md** is the orchestration layer — it defines WHAT to do and WHEN. It contains the
+  step-by-step workflow, MCP adapter mapping, executable Figma Plugin API scripts, script output
+  contracts, intermediate data structures, and template mechanics.
+
+- **Agent instruction file** (e.g., `structure/agent-structure-instruction.md`) is the domain
+  knowledge layer — it defines HOW to think and decide. It contains interpretation guidance for
+  extraction output, decision frameworks, property naming conventions, value formatting rules,
+  worked examples, common mistakes, edge cases, and validation checklists.
+
+SKILL.md should not re-teach domain concepts that the instruction file covers. The instruction file
+should not describe script implementation details or workflow step numbers. The script output
+contract in SKILL.md (what each script returns) is the bridge between the two layers — SKILL.md
+describes the data shapes, the instruction file teaches the agent what to do with them.
+
+See the Reference Files table at the bottom for each spec type's instruction file.
 
 ### Template Infrastructure
 
@@ -346,14 +405,14 @@ Only `firstrun` is committed in `.claude/skills/` and `.agents/skills/` — all 
 
 | File | Content |
 |------|---------|
-| `anatomy/agent-anatomy-instruction.md` | Anatomy annotation: element classification rules, note-writing guidelines, property-aware unhide decisions |
-| `screen-reader/agent-screenreader-instruction.md` | Screen reader spec: data schema, examples, agent behavior |
+| `anatomy/agent-anatomy-instruction.md` | Anatomy annotation: extraction validation checklist, note-writing guidelines, property-aware unhide decisions, concentric layout detection |
+| `screen-reader/agent-screenreader-instruction.md` | Screen reader spec: data schema, platform reference (VoiceOver/TalkBack/ARIA), merge analysis guidance |
 | `screen-reader/voiceover.md` | iOS accessibility properties reference |
 | `screen-reader/talkback.md` | Android semantics and roles reference |
 | `screen-reader/aria.md` | ARIA roles and states reference |
-| `color/agent-color-instruction.md` | Color annotation: data schema, examples, agent behavior |
-| `api/agent-api-instruction.md` | API overview: data schema, examples, agent behavior |
+| `color/agent-color-instruction.md` | Color annotation: strategy selection (A vs B), token resolution rules, element-to-token mapping, rendering decisions |
+| `api/agent-api-instruction.md` | API overview: property classification rules, sub-component patterns (slot vs fixed), naming conventions, validation checklist |
 | `api/api-library.md` | API documentation reference patterns |
-| `structure/agent-structure-instruction.md` | Structure spec: data schema, examples, agent behavior |
+| `structure/agent-structure-instruction.md` | Structure spec: interpretation guidance, section planning, dimensional comparison rules, anomaly detection |
 | `motion/agent-motion-instruction.md` | Motion spec: JSON schema (with pre-computed segments), rendering rules, timeline layout |
 | `motion/export-timeline.jsx` | After Effects export script: keyframe extraction, segment computation, cubic-bezier conversion, value formatting, keyframe stripping |

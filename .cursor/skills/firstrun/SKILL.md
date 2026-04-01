@@ -157,15 +157,19 @@ Using the node ID of one of the found template components (e.g., the Overview or
 
 ```javascript
 const node = await figma.getNodeByIdAsync('NODE_ID_FROM_STEP_6');
+let _p = node; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
+if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
 const textNode = node.findOne(n => n.type === 'TEXT');
 if (textNode) {
-  return textNode.fontName.family;
-} else {
-  return 'Inter';
+  try {
+    const fn = textNode.fontName;
+    if (fn && fn !== figma.mixed && fn.family) return fn.family;
+  } catch {}
 }
+return 'Inter';
 ```
 
-Save the result as `DETECTED_FONT_FAMILY`. If the script returns an error or no text node is found, default to `Inter`.
+Save the result as `DETECTED_FONT_FAMILY`. If the script returns an error or no text node is found, it defaults to `Inter`.
 
 ### Step 8: Write Config to uspecs.config.json
 

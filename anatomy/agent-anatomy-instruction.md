@@ -39,6 +39,8 @@ Additional extraction-level data:
 - **`booleanProps[]`** — Each with `name`, `defaultValue`, `associatedLayer`, `rawKey`, `boundElementIndex`
 - **`variantAxes[]`** — Each with `name`, `options`, `defaultValue`
 - **`instanceSwapProps[]`** — Each with `name`, `defaultValue`, `rawKey`
+- **`rootVariantVisuals`** — `{ hasFills, hasStrokes, hasEffects, cornerRadius }` for the root variant frame. When `hasFills` or `hasEffects` is true, the variant has a visual layer (statelayer/backplate) that should become a synthetic element.
+- **`traversedFrames[]`** — Frames the wrapper-traversal skipped to reach the child container. Each has `{ name, nodeType, hasFills, hasStrokes, hasEffects, cornerRadius, bbox }`. Frames with fills, strokes, or effects are visually meaningful layers that should become synthetic elements.
 
 ### Step 8b context (per-child level)
 
@@ -57,17 +59,70 @@ The extraction script handles classification, unwrapping, binding, and eligibili
 - `controlledByBoolean` is set where expected. If a boolean prop name clearly matches an element name but `controlledByBoolean` is `null`, flag it in the element's notes — do not attempt to reclassify.
 - `shouldCreateSection` is set on every `instance` and `instance-unwrapped` element.
 
+### 1b. Detect skipped visual layers
+
+The extraction script's `resolveChildContainer` traverses through single-child auto-layout FRAMEs, treating them as transparent wrappers. This is correct for genuine wrappers but **skips visually-meaningful frames** that have their own fills, strokes, effects, or corner radii — common in concentric components like checkbox, radio, toggle, FAB, and icon button.
+
+Check `rootVariantVisuals` and `traversedFrames` from the extraction output and insert **synthetic elements** for any skipped visual layers:
+
+1. **Root variant statelayer:** If `rootVariantVisuals.hasFills` or `rootVariantVisuals.hasEffects` is true, the variant frame itself renders a visual layer (typically a statelayer or backplate). Insert a synthetic element at index 1 (the outermost layer) with:
+   - `isSynthetic: true`
+   - `name`: infer from context — use `"statelayer"` when the fill has low opacity (overlay), `"backplate"` when it is a solid background
+   - `nodeType: 'FRAME'`
+   - `classification: 'structural'`
+   - `visible: true`
+   - `bbox: { x: 0, y: 0, w: rootSize.w, h: rootSize.h }`
+   - `shouldCreateSection: false`
+   - `notes`: write a semantic note (e.g., `"Statelayer — pressed/hover state overlay, 12px corner radius"`)
+
+2. **Traversed frames:** For each entry in `traversedFrames` where `hasFills`, `hasStrokes`, or `hasEffects` is true, insert a synthetic element after any root statelayer element with:
+   - `isSynthetic: true`
+   - `name`: use the frame's `name` from the extraction (e.g., `"shape"`)
+   - `nodeType: 'FRAME'`
+   - `classification: 'structural'`
+   - `visible: true`
+   - `bbox`: use the `bbox` from the traversed frame entry
+   - `shouldCreateSection: false`
+   - `notes`: describe the visual role (e.g., `"Shape container — bordered checkbox box, 6px corner radius"`)
+
+3. **Re-index:** After inserting synthetic elements at the start, re-index all elements sequentially (1, 2, 3, …).
+
+4. **Skip when empty:** If `rootVariantVisuals` has no fills/strokes/effects AND `traversedFrames` is empty or all entries lack visual properties, skip this step entirely — no synthetic elements needed.
+
 ### 2. Set unhide strategy for hidden elements
 
-For each element with `visible === false`:
-- If `controlledByBoolean` is set: `unhideStrategy: { method: 'boolean', booleanName: controlledByBoolean.propName, booleanRawKey: controlledByBoolean.rawKey }`
-- If `controlledByBoolean` is `null`: `unhideStrategy: { method: 'direct' }`
+Set `unhideStrategy` on each hidden element per the Property-Aware Unhide Decisions section below.
 
-### 3. Rewrite notes with semantic descriptions
+### 3. Detect concentric layout and set marker strategy
+
+After setting unhide strategies, check whether all elements' centers cluster together. A **concentric layout** means both X-centers and Y-centers fall within 20 px of each other (e.g., checkbox: backplate → structure → checkmark all sharing the same center).
+
+The rendering scripts detect concentric layout automatically and select the marker placement strategy:
+
+| Layout pattern | X-centers | Y-centers | Marker strategy |
+|---------------|-----------|-----------|-----------------|
+| Concentric (overlapping) | clustered | clustered | **Clockwise** — markers rotate around the component: left → top → right → bottom → repeat |
+| Vertical stack | clustered | spread | **Left stagger** — all markers on the left, staggered horizontally with `lineY` offsets |
+| Mixed / horizontal | spread | any | **Alternating** — marker 1 left, even indices top, odd indices bottom |
+
+For **concentric** layouts, compute `lineY` values for the left-stagger fallback (used by per-child sections if they have vertical-stack children):
+
+1. Compute the **shared vertical range** — the intersection where a horizontal line is guaranteed to fall within every element's bounds:
+   - `sharedTop  = max(el.bbox.y)` across all elements (top of the smallest/innermost element)
+   - `sharedBottom = min(el.bbox.y + el.bbox.h)` across all elements (bottom of the smallest/innermost element)
+2. If `sharedBottom <= sharedTop`, skip — the elements don't truly overlap vertically.
+3. Distribute `lineY` values evenly across that range:
+   - For a single element: `lineY = (sharedTop + sharedBottom) / 2`
+   - For N elements: `lineY_i = sharedTop + i * (sharedBottom - sharedTop) / (N - 1)` for each element at position i (0-based)
+4. Set `el.lineY` on each element (component-local coordinate, same space as `el.bbox`).
+
+Elements without `lineY` (non-concentric layouts) use their center Y as before — the rendering script falls back to `elCenterY` when `el.lineY` is not present.
+
+### 4. Rewrite notes with semantic descriptions
 
 Replace the extraction script's generic notes with role-based descriptions following the Note-Writing Guidelines below.
 
-### 4. Final validation
+### 5. Final validation
 
 Run through the Validation Checklist at the bottom of this file. Do NOT add cross-references yet — those are appended after Step 8b.
 
@@ -111,6 +166,16 @@ Rewrite each element's `notes` field following these rules. Use the `classificat
 
 - Describe their visual role: `"Background fill"`, `"Border/divider line"`, `"Decorative icon shape"`
 - Do NOT use generic notes like `"RECTANGLE"` or `"VECTOR"`
+
+### Synthetic elements (`isSynthetic: true`)
+
+Synthetic elements represent visually-meaningful frames that the wrapper traversal skipped. Write notes that describe their specific visual role and include the corner radius when present:
+
+- **Statelayer** (root variant with low-opacity fill): `"Statelayer — pressed/hover state overlay, {N}px corner radius"`
+- **Backplate** (root variant with solid fill): `"Backplate — solid background, {N}px corner radius"`
+- **Shape container** (traversed frame with fills/strokes): `"Shape container — bordered {component} box, {N}px corner radius"` or `"Shape — filled indicator area, {N}px corner radius"`
+- When both stroke and fill are present: `"Shape container — fill and border change with checked/unchecked state, {N}px corner radius"`
+- Do NOT use generic notes like `"Frame with fills"` or `"Traversed frame"`
 
 ### Repeated composition elements (composition-level grouping with `count > 1`)
 
@@ -156,6 +221,8 @@ When the user provides design notes alongside the Figma link (behavioral descrip
 | Leading content v2 | `instance-unwrapped` | true | "Leading content v2 instance" | "Leading content v2 sub-component — optional, controlled by `Leading content` toggle" |
 | Trailing content V2 | `instance-unwrapped` | false | "Trailing content V2 instance" | "Trailing content V2 sub-component — hidden by default, shown via `Trailing content` toggle" |
 | Composable slot | `slot` | true | "Composable slot with 4 children" | "Composable slot — accepts Button group (sub components) items via slot-based pattern" |
+| statelayer (synthetic) | `structural` | true | "Frame with fills" | "Statelayer — pressed/hover state overlay, 12px corner radius" |
+| shape (synthetic) | `structural` | true | "Traversed frame" | "Shape container — bordered checkbox box, fill and border change with state, 6px corner radius" |
 
 ---
 
@@ -200,4 +267,8 @@ After enriching all elements, verify:
 - [ ] `unhideStrategy` is set for every hidden element
 - [ ] Repeated composition elements sharing the same `mainComponentSetId` are collapsed with `count` field
 - [ ] User-provided design context is integrated into relevant notes (not added as standalone text)
+- [ ] `traversedFrames` with visual properties (fills, strokes, or effects) have corresponding synthetic elements in the array
+- [ ] Root variant with fills or effects has a synthetic statelayer/backplate element
+- [ ] All synthetic elements have `isSynthetic: true`, `classification: 'structural'`, `shouldCreateSection: false`, and correct bboxes
+- [ ] Elements are re-indexed sequentially after any synthetic insertions
 - [ ] Cross-references are NOT written yet — they are appended after Step 8b

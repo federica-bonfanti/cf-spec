@@ -153,7 +153,7 @@ ARIA: `checkbox`
 | `value` | string | | |
 | `name` | string | | |
 
-Label merges into the checkbox's accessible name; it is not a separate component.
+When `isIndeterminate` is `true`, the checkbox displays a dash regardless of `isSelected`. The `isSelected` value is preserved for form submission. Label merges into the checkbox's accessible name; it is not a separate component.
 
 ---
 

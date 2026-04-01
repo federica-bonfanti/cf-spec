@@ -26,7 +26,7 @@ Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for ever
 
 **`figma-mcp` requires `fileKey` on every call.** Extract it once from the user's Figma URL at the start of the workflow. For branch URLs (`figma.com/design/:fileKey/branch/:branchKey/:fileName`), use `:branchKey` as the fileKey.
 
-**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, descendant nodes (text, instances) may not be fully loaded — methods like `getRangeAllFontNames`, `findAll`, or `characters` can fail with `TypeError`. Insert this page-loading block immediately after `getNodeByIdAsync`:
+**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, the page content may not be loaded — `findAll`, `findOne`, and `characters` will fail with `TypeError` until the page is activated. Insert this page-loading block immediately after `getNodeByIdAsync`:
 
 ```javascript
 let _p = node; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
@@ -54,7 +54,7 @@ Task Progress:
 - [ ] Step 4b: Run extraction script for deterministic property identification
 - [ ] Step 5: Identify properties and sub-components
 - [ ] Step 6: Generate structured data (main table, sub-component tables, config examples)
-- [ ] Step 7: Re-read instruction file (Pre-Output Validation Checklist, Common Mistakes, Do NOT) and audit
+- [ ] Step 7: Re-read instruction file (Pre-Output Validation Checklist, Common Mistakes) and audit
 - [ ] Step 8: Import and detach the API template
 - [ ] Step 9: Fill header fields
 - [ ] Step 10: Fill main API table
@@ -206,31 +206,23 @@ Use this structured data in Step 5 to identify properties deterministically rath
 
 Using gathered context and the extraction data from Step 4b, identify:
 
-**A. Variant properties** from Figma axes (size, type, state, hierarchy, etc.)
+**A. Variant properties**
 
-**B. Boolean toggles** from instance inspection (isElevated, hasIcon, etc.)
+**B. Boolean toggles**
 
-**C. Variable mode properties** (shape, density) from `figma_get_variables`
+**C. Variable mode properties**
 
-**D. Sub-component configurations:**
-- **Slot content types:** Does a slot have multiple interchangeable options (e.g., leading content can be icon, avatar, image)? → Pattern A sub-component tables
-- **Fixed sub-components:** Is this a compound component composed of 2+ always-present children that each have configurable properties (e.g., Text Field = Label + Input + Hint)? → Pattern B sub-component tables
+**D. Sub-component configurations** (Pattern A: slot content types; Pattern B: fixed sub-components — see instruction file for decision criteria)
 
 ### Step 6: Generate Structured Data
 
-Follow the schema in the instruction file. Build the data as a structured object with:
-- `componentName`: string
-- `generalNotes`: string (optional)
-- `mainTable`: object with `properties` array, each with `property`, `values`, `required` (boolean), `default`, `notes`, optional `isSubProperty`
-- `subComponentTables`: array (optional), each with `name`, `description` (optional), `properties` array (each with `property`, `values`, `required`, `default`, `notes`, optional `isSubProperty`)
-- `configurationExamples`: array (1-4), each with `title`, `variantProperties` (object mapping Figma variant/boolean property keys to values for instantiating the component preview), optional `childOverrides` (array of per-child property override objects for slot children, index 0 = first child), `properties` array (each with `property`, `value`, `notes`)
+Follow the `ApiOverviewData` schema defined in the instruction file. Build the data as a structured object matching those interfaces.
 
 ### Step 7: Audit
 
 Re-read the instruction file, focusing on:
 - **Pre-Output Validation Checklist** — walk through each checkbox
 - **Common Mistakes** section
-- **Do NOT** section
 - **Property Naming** conventions (camelCase, engineer-friendly)
 
 Check your output against each rule. Fix any violations.
@@ -266,15 +258,15 @@ const textNodes = frame.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const compNameFrame = frame.findOne(n => n.name === '#compName');
 if (compNameFrame) {
@@ -312,15 +304,15 @@ const textNodes = mainTable.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 for (const prop of PROPERTIES) {
   const row = rowTemplate.clone();
@@ -395,15 +387,15 @@ const textNodes = section.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 // Set sub-component title
 const titleFrame = section.findOne(n => n.name === '#subcomponent-title');
@@ -521,15 +513,15 @@ const textNodes = section.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 // Set example title
 const titleFrame = section.findOne(n => n.name === '#example-title');
@@ -627,11 +619,8 @@ return { success: true };
 
 ## Notes
 
-- The API overview template key is stored in `uspecs.config.json` under `templateKeys.apiOverview` and is configured via `@firstrun`.
 - Conditional sub-components: If `subComponentTables` is empty or absent, the `#subcomponent-chapter-template` is hidden. If present, each sub-component gets its own cloned section with its own property table.
 - Hierarchy indicators: Both the main table (`#hierarchy-indicator`) and sub-component tables (`#subprop-hierarchy-indicator`) support `isSubProperty` for indented child rows.
-- Configuration examples: Each example has a title, a Preview frame containing a live component instance configured with the example's variant/boolean properties (and optionally `childOverrides` for slot children), and a property/value table. The `#example-asset-description` text placeholder is removed and replaced by the actual component instance. Examples are rendered as separate cloned sections from `#config-example-chapter-template`.
-- Composable slot child overrides: When a component uses composable slots and a configuration example needs child instances configured differently from their defaults (e.g., multiple items selected, different sizes, icon-only layout), use `childOverrides` to specify per-child property overrides. Each array entry corresponds to one slot child by index. Use the same Figma property keys as `variantProperties`. The script uses direct child access (`instance.children[0].children`) — not `findAll` — to avoid errors when traversing into nested instances.
 - The target node can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). The extraction script detects the type and returns `isComponentSet` accordingly. When the node is a standalone component, there are no variant axes — only boolean, instance swap, and variable mode properties apply. Instance creation in Step 12 uses `compNode.createInstance()` directly for standalone components.
 - The extraction script (Step 4b) programmatically reads `componentPropertyDefinitions` from the component set or component, capturing all variant axes (with options and defaults), boolean toggles (with associated layer names and raw keys), and instance swap properties. This structured data makes property identification in Step 5 deterministic rather than relying solely on LLM interpretation of MCP tool output. The `rawKey` values (including `#nodeId` suffixes) are needed for `setProperties()` when creating configuration example previews in Step 12.
 - The instruction file (`api/agent-api-instruction.md`) contains the JSON schema, examples, and property classification rules. The AI reasoning for property identification is unchanged — only the delivery mechanism has changed.

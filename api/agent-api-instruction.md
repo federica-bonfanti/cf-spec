@@ -35,14 +35,7 @@ May include: component name, specific properties to document, sub-components, co
 ## Analysis Process
 
 ### Step 1: Get Visual Context
-Use MCP tools:
-1. `figma_navigate` — Open the component URL
-2. `figma_take_screenshot` — See the component and its variants
-3. `figma_get_file_data` on the **component set** — Get variant axes (the properties visible in variant names like "Size=Large, State=Enabled")
-4. `figma_get_component` on a **specific instance** — Get the full props interface including boolean toggles
-5. `figma_get_variables` — Check for variable collections with multiple modes that control component properties
-
-**Why all four?** Figma separates properties into:
+Gather component data using the MCP tools specified in the SKILL.md workflow (Step 4). You need information from multiple sources because Figma separates properties into three layers:
 - **Variant axes** — Appear in variant names (e.g., `Size`, `State`, `Hierarchy`)
 - **Instance properties** — Boolean toggles and modifiers only visible when inspecting a single instance (e.g., `hasIcon`, `isElevated`, `showDivider`)
 - **Variable modes** — Properties controlled at the container level via variable collections (e.g., `shape`, `density`)
@@ -69,7 +62,6 @@ Ask these diagnostic questions:
    → Use booleans only for simple on/off modifiers, not for content slots:
    - Modifiers: `isElevated`, `isBackgroundSafe`, `isFocused`
    - Simple decorations: `hasDivider`, `showBadge` (when there's only one type)
-   - If a Figma boolean controls the visibility of a sub-component that has variant types, it is a content slot — use an enum with `none`, not a boolean (see rule 2 above)
 
 4. **Are there variable collections with modes that control this component?**
    → Look for collections named after the component or property (e.g., "Button shape", "Button density")
@@ -96,6 +88,15 @@ Ask these diagnostic questions:
 
 10. **What are common configuration patterns?**
    → Create 1-4 examples showing typical use cases
+
+**Quick reference for property value formatting:**
+- Boolean property → values: `"true, false"`
+- Enum property → values: `"option1, option2, option3"`
+- String property → values: `"string"`
+- Properties sharing a prefix → consider `isSubProperty` for hierarchy
+- Component usable on varied backgrounds → look for `isElevated`, `isBackgroundSafe`
+- Accessibility focus ring in design → check for `isFocused` boolean
+- Nested component instances → add `SubComponentApiTable` if parent configures them
 
 ### Step 3: Extract Property Details
 For each property found:
@@ -383,31 +384,6 @@ Select examples that show:
 
 ---
 
-## Applying the Principles
-
-| If you see... | Questions to ask | Result |
-|---------------|------------------|--------|
-| Figma variants panel | What properties exist? | Document each as ApiProperty |
-| Figma "State" variant with Enabled/Hover/Pressed/Disabled | Are these transient or persistent? | Drop transient states (hover, pressed, focused); extract persistent ones as booleans (e.g., `isDisabled`) |
-| Nested component instances | Does parent configure it? | Add SubComponentApiTable |
-| Boolean property | What states does it toggle? | values: "true, false" |
-| Enum property | What are all options? | values: "option1, option2, option3" |
-| String property | Is it freeform? | values: "string" |
-| Properties with same prefix | Are they related? | Consider hierarchy (isSubProperty) |
-| Slot with multiple content options | What content types are available? | Use enum with `none` as first option (e.g., `leadingContentType: none, icon, avatar`) |
-| Component with "leading/trailing" layers | What types can each slot contain? | Document each slot as enum; create sub-component table for each type's configuration |
-| Component composed of 2+ always-present children | Do the children have configurable properties? | Create fixed sub-component tables (Pattern B) for each child with its own API |
-| Component usable on varied backgrounds | Is there an elevation/safe mode? | Look for `isElevated`, `isBackgroundSafe` |
-| Accessibility focus ring in design | Is focus separate from state? | Check for `isFocused` boolean |
-| Variable collection named "[Component] shape" | Is shape controlled via modes? | Document as property with note: "Controlled via variable mode" |
-| Variable collection named "[Component] density" | Is spacing controlled via modes? | Document density values from mode names (e.g., default, compact, spacious) |
-| Variable with multiple mode values | Does this affect the component? | Check if variable is used in component; document as mode-controlled property |
-| Multiple properties with same prefix + sequential numbers (e.g., `tab1`–`tab8`) | Do they all use the same sub-component type? | Collapse into a single array property (e.g., `items: TabItem[]`); document item shape as sub-component table |
-| Figma boolean controlling a sub-component with its own `Type` variant | Is this a content slot masquerading as a boolean? | Merge into a single enum with `none` (e.g., `leadingArtwork: none, icon, vector, custom`). Do not output a boolean + separate type |
-| Event handler properties (`onPress`, `onChange`, etc.) | Are these visible in Figma? | No — omit event handlers from the spec. They are code-level implementation details |
-
----
-
 ## Edge Cases
 
 | Situation | Action |
@@ -418,17 +394,10 @@ Select examples that show:
 | Property name in Figma is ambiguous | Translate to engineer-friendly name; note original Figma name if non-obvious |
 | Multiple properties share a prefix | Consider using `isSubProperty` to show hierarchy |
 | Figma variant not clearly a "default" | Use the most common/neutral state; note uncertainty if needed |
-| Variant names don't show all properties | Inspect a specific instance with `figma_get_component` to reveal boolean toggles |
-| Slot with multiple content types | Use enum with `none` option (e.g., `leadingContentType: none, icon, avatar`); avoid boolean + enum pattern |
-| Content type has its own properties | Create sub-component table for that type (e.g., "Leading content — Avatar" with size, imageSource, etc.) |
-| Component has always-present children (e.g., Label + Input + Hint) | Create fixed sub-component tables (Pattern B) named by the child, not by slot |
+| Variant names don't show all properties | Inspect a specific instance to reveal boolean toggles |
 | Component appears on images in screenshots | Look for `isBackgroundSafe` or `isElevated` modifier |
-| Variable collection named after component | Check modes for shape/density properties; document with "Controlled via variable mode" note |
-| Property not in variants but affects appearance | Check `figma_get_variables` for mode-controlled properties (shape, density, corner radius) |
 | Corner radius varies but no "shape" variant | Likely controlled via variable mode; check for "[Component] shape" collection with Rectangular/Rounded modes |
 | Spacing/padding varies but no "density" variant | Likely controlled via variable mode; check for "[Component] density" or "Density" collection |
-| Numbered slots like `tab1`–`tab8` or `item1`–`item5` | These are Figma workarounds for arrays. Collapse into a single array property (e.g., `items: TabItem[]`) with `maxItems` in notes; boolean visibility toggles represent array length, not individual properties |
-| Figma boolean toggle on a sub-component with `Type` variant | This is a content slot, not a simple boolean. Merge: boolean `false` = `none`, boolean `true` = the sub-component's type values. Output a single enum (e.g., `leadingArtwork: none, icon, vector, custom`) |
 
 ---
 
@@ -438,7 +407,7 @@ Some component properties are controlled via **Figma variable modes** rather tha
 
 ### How to Detect
 
-1. Run `figma_get_variables` to see all variable collections
+1. Check the file's variable collections
 2. Look for collections named after the component: `[Component] shape`, `[Component] density`, etc.
 3. Check the modes—these become the property values (e.g., `Rectangular`, `Rounded`)
 
@@ -483,7 +452,7 @@ Variable mode properties are easy to miss because:
 - They don't appear in instance property panels
 - They only show up when inspecting the file's variable collections
 
-Always run `figma_get_variables` to catch these properties.
+Always check variable collections to catch these properties.
 
 ---
 
@@ -493,14 +462,14 @@ Before returning the JSON, verify:
 
 | Check | What to Verify |
 |-------|----------------|
-| ☐ **Variable modes checked** | Used `figma_get_variables` to check for mode-controlled properties (shape, density) |
-| ☐ **Instance properties checked** | Inspected a specific instance with `figma_get_component` to find boolean toggles not visible in variant names |
+| ☐ **Variable modes checked** | Checked variable collections for mode-controlled properties (shape, density) |
+| ☐ **Instance properties checked** | Inspected a specific instance to find boolean toggles not visible in variant names |
 | ☐ **Fixed sub-components identified** | If component is composed of 2+ always-present children with configurable properties, each has a sub-component table (Pattern B) |
 | ☐ **Slot content types documented** | If slots have multiple content options, each configurable type has a sub-component table (Pattern A) |
 | ☐ **Sub-component ordering** | Fixed sub-components first (visual/DOM order), then slot content types (leading → middle → trailing) |
 | ☐ **Property naming** | All properties use camelCase, engineer-friendly names; original Figma names noted if translation is non-obvious |
 | ☐ **Library cross-check** | Checked `api-library.md` for canonical names on common properties (variant, size, isDisabled, label, leadingIcon, etc.); used library name when Figma name was ambiguous |
-| ☐ **No boolean + enum redundancy** | Content slots use single enum with `none` option, not separate boolean + enum |
+| ☐ **No boolean + enum redundancy** | Content slots use single enum with `none` option, not separate boolean + enum. When Figma uses a boolean toggle on a sub-component with variant types, merge into a single enum |
 | ☐ **Required vs optional** | Properties with defaults are `required: false`; properties without defaults are `required: true` |
 | ☐ **Notes field** | Every property has a `notes` value (use `"–"` if self-explanatory) |
 | ☐ **Hierarchy indicators** | Nested properties have `isSubProperty: true` |
@@ -511,22 +480,7 @@ Before returning the JSON, verify:
 | ☐ **No transient states as properties** | Hover, pressed, and focused are not listed as property values — only persistent states (disabled, selected, loading) are documented as booleans |
 | ☐ **No event handlers** | `onPress`, `onChange`, `onSelectionChange`, etc. are omitted — these are code-level concerns, not design properties |
 | ☐ **No unnecessary `key` on array items** | Array items do not include a `key` property unless stable IDs differing from labels are specifically required |
-| ☐ **Boolean + sub-component variant merged** | When Figma uses a boolean toggle on a sub-component that has variant types, the boolean off-state is represented as `none` in a single enum — not as a separate boolean property |
 | ☐ **Straight quotes** | JSON uses ASCII `"` not curly quotes `""` |
-
----
-
-## Do NOT
-
-- **Do NOT copy Figma names verbatim.** Translate to engineer-friendly camelCase (see Property Naming).
-- **Do NOT duplicate sub-component APIs.** Reference them instead.
-- **Do NOT leave notes empty.** Every property needs a brief description.
-- **Do NOT include non-configurable properties.** Skip internal/private props.
-- **Do NOT guess default values.** Use `"–"` if unknown.
-- **Do NOT create more than 4 examples.** Focus on the most important configurations.
-- **Do NOT include event handlers.** `onPress`, `onChange`, `onSelectionChange` are code-level; omit them.
-- **Do NOT add `key` to array items unless required.** Array position and label are sufficient for design specs.
-- **Do NOT mirror Figma's boolean + sub-component variant as two properties.** Merge into a single enum with `none`.
 
 ---
 
@@ -540,33 +494,34 @@ Before returning the JSON, verify:
 | Layout | width, alignment, spacing |
 | Data | value, items, data |
 
-Note: Event handlers (onPress, onChange, onFocus) are code-level implementation details. Do not include them in the API spec.
-
 ---
 
 ## Common Mistakes
 
 - **Missing required field:** Every property needs all fields (property, values, required, default, notes)
 - **Wrong required status:** Properties with defaults are NOT required
-- **Boolean + enum redundancy:** Don't use `hasLeadingContent` + `leadingContentType`; use single enum with `none` option
+- **Boolean + enum redundancy:** When Figma uses a boolean to show/hide a sub-component that has its own `Type` variant, merge into a single enum with `none` (e.g., `leadingArtwork: none, icon, vector, custom`). Do not output a `hasLeadingArtwork` boolean + a separate type enum
 - **Sub-component table duplicating type selection:** Sub-component tables should document configuration FOR a content type, not which type to select
 - **Too many examples:** Keep to 1-4 focused examples
 - **Missing or wrong variantProperties:** Each example must include `variantProperties` mapping Figma property keys to values so a live component instance can be placed in the Preview frame
-- **Empty notes:** Always provide implementation guidance
+- **Empty notes:** Always provide a brief description or use `"–"` if self-explanatory
+- **Figma names copied verbatim:** Translate to engineer-friendly camelCase (see Property Naming)
 - **Inconsistent property names:** Use consistent camelCase translation throughout
 - **Missing hierarchy indicators:** Use isSubProperty for nested properties
 - **Curly quotes:** Use straight quotes `"` not `""`—JSON requires ASCII
 - **Missing instance properties:** Only documenting variant axes from variant names; always inspect a specific instance to find boolean visibility toggles and modifiers
-- **Missing variable mode properties:** Not checking `figma_get_variables` for mode-controlled properties like shape or density; always check for variable collections named after the component
+- **Missing variable mode properties:** Not checking variable collections for mode-controlled properties like shape or density; always check for variable collections named after the component
 - **Missing sub-component configuration:** When a slot has multiple content types, each type may have its own properties—document them in separate sub-component tables
 - **Missing fixed sub-components:** When a component is composed of always-present children (e.g., Label + Input + Hint), each child with configurable properties needs its own sub-component table (Pattern B)
 - **Wrong sub-component naming:** Fixed sub-components use the child name ("Label", "Input"), not the slot pattern ("Leading content — Avatar")
-- **Numbered slots listed individually instead of as array:** When Figma uses `tab1`–`tab8` or `item1`–`item5` with the same sub-component type, collapse into a single array property (e.g., `items: TabItem[]`). Don't list `tab1`, `tab2`, ... `tab8` as separate boolean properties
-- **Transient states listed as property values:** Hover, pressed, and focused are runtime states handled by the platform — do not include them as values of a `state` property. Only persistent states like disabled, selected, and loading should be documented, typically as booleans (e.g., `isDisabled`)
-- **Boolean + sub-component variant not merged into enum:** When Figma uses a boolean to show/hide a sub-component that has its own `Type` variant (e.g., `Leading artwork: true/false` + Artwork container `Type: Icon, Vector, Custom`), merge into a single enum with `none` (e.g., `leadingArtwork: none, icon, vector, custom`). Do not output a `hasLeadingArtwork` boolean
-- **Event handlers included:** `onPress`, `onChange`, `onSelectionChange`, etc. are code-level implementation details not visible in Figma. Omit them from the spec
-- **Unnecessary `key` on array items:** When items are in an array, the index and label provide sufficient identity. Do not add a `key` property unless the component specifically requires stable IDs that differ from labels
-- **Example table doesn't reflect preview state:** When an example uses `childOverrides` to configure child instances (e.g., selecting multiple items, changing size or layout), the table must include matching `item N propertyName` rows — otherwise the preview and table tell different stories
+- **Numbered slots listed individually instead of as array:** When Figma uses `tab1`–`tab8` or `item1`–`item5` with the same sub-component type, collapse into a single array property (e.g., `items: TabItem[]`). Don't list each numbered slot as a separate property
+- **Transient states listed as property values:** Hover, pressed, and focused are runtime states handled by the platform — do not include them as values of a `state` property. Only persistent states (disabled, selected, loading) should be documented as booleans (e.g., `isDisabled`)
+- **Event handlers included:** `onPress`, `onChange`, `onSelectionChange`, etc. are code-level implementation details not visible in Figma. Omit them
+- **Unnecessary `key` on array items:** Array position and label provide sufficient identity. Only add `key` for stable IDs that differ from labels
+- **Duplicated sub-component APIs:** Reference them instead of re-documenting
+- **Guessed default values:** Use `"–"` if the default is unknown
+- **Non-configurable properties included:** Skip internal/private props not exposed to consumers
+- **Example table doesn't reflect preview state:** When an example uses `childOverrides` to configure child instances (e.g., selecting multiple items, changing size or layout), the table must include matching `item N propertyName` rows so the preview and table tell the same story
 
 ---
 

@@ -6,7 +6,7 @@ You are an accessibility expert generating screen reader specifications for Voic
 
 ## Task
 
-Analyze a UI component from a Figma link, image, or description. Render the screen reader specification directly in Figma using MCP tools — focus order, component anatomy, and platform-specific accessibility properties organized by state. Do NOT output JSON to the user; all data flows directly into Figma template placeholders via `figma_execute`.
+Analyze a UI component from a Figma link, image, or description. Produce screen reader specifications — focus order, component anatomy, and platform-specific accessibility properties organized by state.
 
 **Before starting, read:** `voiceover.md`, `talkback.md`, `aria.md`.
 
@@ -15,12 +15,7 @@ Analyze a UI component from a Figma link, image, or description. Render the scre
 ## Inputs
 
 ### Figma Link (preferred)
-When provided, use MCP tools to gather context:
-1. `figma_navigate` — Open the component URL
-2. `figma_take_screenshot` — Capture the component visually
-3. `figma_get_file_data` — Get component structure, variants, and states
-4. `figma_get_component_for_development` — Get component data with visual reference (if nodeId known)
-5. `figma_search_components` — Find component by name if URL points to a page
+When provided, use MCP tools from SKILL.md Step 4 to gather context.
 
 ### Image
 Alternative to Figma link. Analyze: element type, visible states, text labels, icons, grouping context.
@@ -113,7 +108,7 @@ Ask these diagnostic questions:
 ### Step 4: Enumerate States
 List all states to document (enabled, disabled, selected, expanded, error, focused, etc.). For each state, determine if the focus order changes.
 
-**Behavioral states from user context:** Review the user's description for behavioral configurations (e.g., single-select vs. multi-select, read-only vs. editable) that are not represented as Figma variant axes. These should be documented as separate state entries when they produce different semantic properties (different roles, different ARIA attributes, different selection models). For grouped controls, document one state per selection behavior rather than generic enabled/disabled.
+**Behavioral states from user context:** Review the user's description for behavioral configurations (e.g., single-select vs. multi-select, read-only vs. editable, collapsed vs. expanded) that are not represented as Figma variant axes. These should be documented as separate state entries when they produce different semantic properties (different roles, different ARIA attributes, different selection models). For grouped controls, document one state per selection behavior rather than generic enabled/disabled.
 
 **State grouping — collapse states with identical accessibility semantics:**
 
@@ -145,8 +140,6 @@ The focus order section uses the same table format as platform sections, but:
 - `name` is the focus stop name (e.g., "Input field", "Trailing icon button")
 - `announcement` is a brief description of the stop
 - The `properties` describe what visual parts merge into this stop and how
-
-**Important:** Only list actual focus stops. Do not list merged/consumed parts as separate entries. Instead, note them in the `notes` of the stop they merge into.
 
 ### Example
 
@@ -200,7 +193,7 @@ Order: Name -> Role -> State. Prefer native HTML over ARIA.
 
 ## Data Structure Reference
 
-*Use this structure to organize your analysis. The data is passed directly into Figma template placeholders — no JSON output is needed.*
+*Use this structure to organize your analysis.*
 
 ```typescript
 interface ScreenReaderData {
@@ -266,10 +259,10 @@ interface PropertyItem {
 | Field | Rule |
 |-------|------|
 | `componentName` | Type: "Button", "Tooltip", "Tab bar", "Text field", etc. |
-| `compSetNodeId` | Figma node ID of the component set, from the extraction script. Used for creating instances in Preview placeholders. |
-| `rootSize` | `{ w, h }` of the default variant. Used to center the component instance in Preview placeholders. |
-| `elements` | Array of direct children with bounding boxes from extraction. Each element has `isFocusStop` set during merge analysis — used to build `FOCUS_STOPS` for marker rendering. |
-| `variantAxes` | Array of variant property axes from extraction. Each axis has `name`, `options`, and `defaultValue`. Used to build `stateVariantProps` — mapping each documented state to variant property values for preview instances. |
+| `compSetNodeId` | Figma node ID of the component set, from the extraction script. |
+| `rootSize` | `{ w, h }` of the default variant, from the extraction script. |
+| `elements` | Array of direct children with bounding boxes from extraction. Each element has `isFocusStop` set during merge analysis. |
+| `variantAxes` | Array of variant property axes from extraction. Each axis has `name`, `options`, and `defaultValue`. |
 | `guidelines` | Bullet points. First bullet should describe focus order for compound components. Cover: edge cases, platform differences, focus behavior. |
 | `focusOrder` | **Top-level, optional.** Only for compound components (2+ focusable/announced parts). Shown once as an overview, not repeated per state. Note: even when `focusOrder` is omitted, every `TableData` still needs `focusOrderIndex`. |
 | `focusOrder.title` | Always `"Focus order"` |
@@ -277,7 +270,7 @@ interface PropertyItem {
 | `state` | Component state: "enabled", "disabled", "error", "Tab selected", "Tooltip visible" |
 | `description` | Optional. Brief description of what's different about this state. |
 | `variantProps` | `Record<string, string>` — variant axis values for this state's preview instance. Matched from `stateVariantProps` (Step 5F). Defaults to `{}` when the state is behavioral (e.g., "focused") rather than a Figma variant. |
-| `sections` | Array of platform sections only: VoiceOver (iOS), TalkBack (Android), ARIA (Web). **No focus order inside states.** |
+| `sections` | Array of platform sections only: VoiceOver (iOS), TalkBack (Android), ARIA (Web). |
 | `title` | Section title. Use exact names: `"VoiceOver (iOS)"`, `"TalkBack (Android)"`, `"ARIA (Web)"` |
 | `tables` | One or more tables per section. For platforms: one table per component part. |
 | `focusOrderIndex` | Reading order position (1, 2, 3…). Shown in the `#focus-order` column. Every table must have this — even single-stop components get `1`. |
@@ -292,8 +285,6 @@ interface PropertyItem {
 1. **VoiceOver (iOS)**
 2. **TalkBack (Android)**
 3. **ARIA (Web)**
-
-Focus order is **not** inside states — it is a top-level field rendered once before all states.
 
 ### Tables Within Platform Sections
 
@@ -406,7 +397,7 @@ Before rendering in Figma, verify your structured data against these checks:
 
 ## Examples (Internal Reference Only)
 
-These examples show the **data shape** you should build mentally before rendering in Figma. Do NOT output these as JSON to the user. Use them only to understand how to structure the values you pass into `figma_execute` calls.
+These examples show the **data shape** you should build mentally before rendering in Figma.
 
 ### Simple Component (Button)
 

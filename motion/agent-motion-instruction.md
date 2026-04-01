@@ -222,34 +222,23 @@ Use the fonts already present in the template. When cloning template nodes and s
 
 ---
 
-## Do NOT
+## Errors and Anti-Patterns
 
-- **Do NOT invent keyframe data.** Only use data from the clipboard JSON.
-- **Do NOT hardcode bar colors.** Read from `#color-bezier`, `#color-linear`, `#color-hold` directly (no swatch child).
-- **Do NOT hardcode track width.** Compute the ideal width dynamically (min 1600px, with 50px label padding) and resize `#track-area` + `#ruler-track`.
-- **Do NOT show easing text on bars.** Bars display the from->to value transition; easing is shown by bar color and in the table.
-- **Do NOT include non-animated layers.** The export script filters out no-change segments. Skip any layer where `hasAnimatedSegments` is `false`.
-- **Do NOT use fractional milliseconds.** The export script pre-computes all ms values as integers (`composition.durationMs`, `segment.startMs`, etc.).
-- **Do NOT compute per-segment bar positions.** Pass `pxPerMs` and `trackWidth` to the Figma code; it computes `barX` and `barWidth` at render time.
-- **Do NOT use "x" for dimensions.** Use `×` (Unicode multiplication sign) in the composition meta.
-- **Do NOT reorder layers.** Preserve the order from the JSON (after filtering).
-- **Do NOT collapse properties.** Each animated property gets its own row in the timeline.
-- **Do NOT override template fonts.** Use the font already in each text node.
-
----
-
-## Common Mistakes
-
-- **Manually computing segments, easing, or bar positions:** The export script pre-computes `segments[]` with all display values. The Figma code computes bar positions from `pxPerMs`. The agent should not do arithmetic on segment data.
-- **Skipping `hasAnimatedSegments` check:** Always check `layer.hasAnimatedSegments` before rendering. Layers with `false` must be omitted.
-- **Hardcoding bar colors:** Colors must be read from the legend color nodes at runtime (`#color-bezier`, `#color-linear`, `#color-hold` — direct fill, no swatch child).
-- **Hardcoding track width:** The track width must be computed dynamically based on composition duration (min 1600px, with 50px right padding for tick labels), not assumed to be a fixed value. Resize both `#track-area` and `#ruler-track` to the computed width.
-- **Showing easing on bars:** Bar labels show `segment.barLabel` (from -> to values), not easing text. Easing is conveyed by color.
-- **Zero-width bars:** Very short segments must still render with minimum 4px width.
-- **Placing bars outside track bounds:** Bars must not exceed the track width. If `barX + barWidth > trackWidth`, clip to trackWidth.
-- **Curly quotes in text:** Use straight quotes `"` not `""`.
-- **Overriding fonts:** Don't substitute the template's font with another font family. Load and use whatever font the text node already has.
-- **Wrong segment field names:** Use `segment.startMs` (not `delay`), `segment.durationMs` (not `duration`), `segment.easing` (not `easingLabel`).
+- **Inventing keyframe data.** Only use data from the clipboard JSON.
+- **Manually computing segments, easing, or bar positions.** The export script pre-computes `segments[]` with all display values. The Figma code computes `barX` and `barWidth` from `pxPerMs` at render time. The agent should not do arithmetic on segment data.
+- **Hardcoding bar colors.** Colors must be read from the legend color nodes at runtime (`#color-bezier`, `#color-linear`, `#color-hold` — direct fill, no swatch child). Do not hardcode RGB values.
+- **Hardcoding track width.** Compute the ideal width dynamically (min 1600px, with 50px right padding for tick labels) and resize both `#track-area` and `#ruler-track` to the computed width.
+- **Showing easing text on bars.** Bars display `segment.barLabel` (from -> to values); easing is conveyed by bar color and appears in the detail table.
+- **Skipping `hasAnimatedSegments` check.** Always check `layer.hasAnimatedSegments` before rendering. Layers with `false` must be omitted entirely.
+- **Using fractional milliseconds.** The export script pre-computes all ms values as integers (`composition.durationMs`, `segment.startMs`, etc.).
+- **Using "x" for dimensions.** Use `×` (Unicode multiplication sign) in the composition meta.
+- **Reordering layers.** Preserve the order from the JSON (after filtering).
+- **Collapsing properties.** Each animated property gets its own row in the timeline.
+- **Overriding template fonts.** See Font Handling in Writing Notes above.
+- **Zero-width bars.** Very short segments must still render with minimum 4px width.
+- **Placing bars outside track bounds.** Bars must not exceed the track width. If `barX + barWidth > trackWidth`, clip to trackWidth.
+- **Curly quotes in text.** Use straight quotes `"` not curly `""`.
+- **Wrong segment field names.** Use `segment.startMs` (not `delay`), `segment.durationMs` (not `duration`), `segment.easing` (not `easingLabel`).
 
 ---
 

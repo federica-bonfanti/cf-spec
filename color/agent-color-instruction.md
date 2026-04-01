@@ -34,19 +34,11 @@ May include: component name, specific variants to document, context about usage.
 
 ## Analysis Process
 
-**Note:** When following the SKILL.md workflow, these steps provide domain knowledge for the analysis phase. The SKILL.md steps (Step 4b extraction, Step 4c interpretation) supersede the manual MCP calls below.
+**Note:** These steps provide domain knowledge for the analysis phase. The SKILL.md defines which MCP tools to call and when (Step 4 context gathering, Step 4b extraction).
 
-### Step 1: Get Visual Context
-Use MCP tools:
-1. `figma_navigate` — Open the component URL
-2. `figma_take_screenshot` — See the component layout and states
-3. `figma_get_file_data` — Get detailed structure with fill/stroke information
-4. `figma_get_component` — Get component data including visual properties
-5. `figma_get_variables` — Check for component-specific variable collections that control color variants
-6. `figma_get_token_values` — Get all variable values organized by collection and mode
-7. `figma_get_styles` — Get color styles if component uses styles instead of variables
+### Step 1: What to Look For During Context Gathering
 
-**Why include variable inspection?** Some components have color variants controlled via variable modes rather than traditional Figma variants. Examples:
+**Variable inspection is critical.** Some components have color variants controlled via variable modes rather than traditional Figma variants. Examples:
 - "Tag color" collection with modes: Default, Success, Warning, Error
 - "Badge style" collection with modes: Neutral, Info, Positive, Negative
 - "[Component] emphasis" collection with modes: Low, Medium, High
@@ -65,40 +57,17 @@ Ask these diagnostic questions:
 3. **Does the component have visual variants?** (Default, Negative, Primary, etc.)
    → Combine with states: one variant per visual-variant + state combination (e.g., "Default / Enabled", "isNegative / Hover").
 
-4. **Are there nested components?** (Button inside a Section heading)
-   → Include actual tokens for sub-component elements. Use the sub-component name (from extraction metadata) for richer element names and notes (e.g., "Button container fill").
+4. **Are there nested components?** → See the **Sub-Components (Nested Components)** section below for handling rules and the container/slot special case.
 
-   **Special case — Container/slot component:** If the parent component has no color entries of its own (no fills, strokes, or effects) and ALL color comes from sub-component instances, re-target extraction to the sub-component and document it as the primary subject. Keep the parent name as the annotation title and note the container relationship in generalNotes.
+5. **Are there component-specific variable collections that control colors?** → See the **Variable Mode Colors** section below for detection, documentation patterns, and strategy selection.
 
-5. **Are there component-specific variable collections that control colors?**
-   → Look for collections named after the component: "[Component] color", "[Component] style", "[Component] emphasis"
-   → Common examples: "Tag color" (Default, Success, Warning, Error), "Badge style" (Neutral, Positive, Negative)
-   → Each mode becomes its own variant entry with one "Spec" table — unless the two-gate model in the Complexity Analysis section indicates Strategy B (requires a non-state multiplier AND Strategy A sections > 6).
-
-### Step 3: Extract Token Names
-
-**Note:** When using the SKILL.md workflow, the extraction script resolves tokens automatically — preferring variable `codeSyntax.WEB`, falling back to variable name, then paint style name. Manual conversion is only needed for non-SKILL.md workflows.
-
-Figma returns tokens in CSS variable format. Convert to clean token names:
-
-| Figma Format | Clean Token |
-|-------------|-------------|
-| `var(--content/contentPrimary,#000000)` | `contentPrimary` |
-| `var(--background/backgroundSecondary,#f3f3f3)` | `backgroundSecondary` |
-| `color: var(--border/borderOpaque)` | `borderOpaque` |
-
-Look for tokens in:
-- `className` attributes (Tailwind-style: `text-[color:var(--content/contentPrimary)]`)
-- Style descriptions in the MCP output
-- Fill/stroke color references
-
-### Step 4: Map Elements to Tokens
+### Step 3: Map Elements to Tokens
 For each visual element in the component:
 1. Identify the element name (match Figma layer name when possible)
 2. Find its color token
 3. Write a brief description of what the element does
 
-**Consolidated extraction data:** When using the SKILL.md workflow, Step 4b produces a single extraction payload containing color bindings (`variantColorData`), axis classification (`axisClassification`), boolean enrichment (`booleanDelta`), mode detection (`modeDetection`), and sub-component metadata (`subComponentName` on entries from nested instances). Use these fields directly rather than re-analyzing from scratch.
+**Consolidated extraction data:** When using the SKILL.md workflow, use the extraction output fields (`variantColorData`, `axisClassification`, `booleanDelta`, `modeDetection`) directly rather than re-analyzing from scratch. See the Step 4b output contract in the SKILL.md for field definitions.
 
 **Key insight:** Element names should be consistent across states. If "Background" appears in Enabled state, use "Background" in Hover state too—don't rename it.
 
@@ -268,7 +237,7 @@ When a component contains another component (e.g., a Button inside a Section hea
 - **Group sub-component entries together** in the table when it aids readability
 - **Order elements** in visual order: leading slots → middle → trailing
 
-**Extraction metadata:** The extraction script tags INSTANCE children with `subComponentName` (the resolved component set name, e.g., `"Button"`). Use this field to deterministically identify nested components — do not guess based on layer names alone. When entries have `subComponentName`, include their actual tokens in the table and use the sub-component name to write richer, more descriptive notes.
+**Using `subComponentName`:** Entries from nested instances include a `subComponentName` field (see Step 4b output contract in the SKILL.md). Use this field to deterministically identify nested components — do not guess based on layer names alone. When entries have `subComponentName`, include their actual tokens in the table and use the sub-component name to write richer, more descriptive notes.
 
 **Example:**
 ```json
@@ -335,19 +304,6 @@ Use only when a non-state color-relevant multiplier exists AND Strategy A would 
 | Tag        | 5      | 2 types × 11 modes   | PASS   | 110 > 6 | **B** (22 sections, 5 cols) |
 | Badge      | 3      | 5 modes              | PASS   | 15 > 6  | **B** (5 sections, 3 cols)  |
 | Switch     | 4      | None                 | FAIL   | --      | **A** (4 sections)          |
-
-### Mode-Controlled + Interactive Pattern
-
-Some components have BOTH mode-controlled colors AND interactive states. Example: Tag has a "Tag color" collection with 11 modes AND a State axis with 5 values.
-
-**How to handle:**
-
-1. Each mode must be rendered as its own section(s) — do NOT collapse modes into `generalNotes` only
-2. Create **one section per Type x Mode combination**: e.g., 2 types x 11 modes = 22 sections named "Primary / Gray", "Primary / Orange", ..., "Secondary / Gray", etc.
-3. Use `modeDetection.modeTokenMap` from the extraction output to resolve generic tokens (e.g., `Primary/tagBackground`) to their semantic aliases per mode (e.g., `Tag/Gray/backgroundPrimary` for Gray mode)
-4. Apply the two-gate model from the Decision Logic section. For components with many modes (e.g., Tag with 11), Gate 1 passes (modes are a non-state multiplier) and Gate 2 typically passes (section count far exceeds 6), so Strategy B applies — states become column headers. For components with few modes (e.g., 2 modes × 3 states = 6 sections), Gate 2 may not pass — use Strategy A
-5. The `generalNotes` should still explain the mode system at a high level, but every mode's tokens must appear in their own sections
-6. Each section's preview shows all state instances with the correct color mode applied via `setExplicitVariableModeForCollection`
 
 ## Variant Structure
 
@@ -566,9 +522,11 @@ Note: Light/Dark theme does not need to be checked. Semantic tokens handle theme
 
 ### How to Detect
 
-1. Run `figma_get_variables` to see all variable collections
+1. Check for component-specific variable collections in the Figma file
 2. Look for collections named after the component: "[Component] color", "[Component] style", "[Component] emphasis"
 3. Mode names indicate the color variants (e.g., Default, Success, Warning, Error)
+
+Variable mode colors are easy to miss — they don't appear as traditional Figma variants, and the component may look like it has only one color when inspected normally. Always check for mode-controlled collections on components that likely have semantic color variants (tags, badges, alerts, status indicators).
 
 ### Common Component Color Collections
 
@@ -581,9 +539,11 @@ Note: Light/Dark theme does not need to be checked. Semantic tokens handle theme
 
 ### How to Document
 
-**Every mode must be rendered as its own section(s).** Do not document modes only in `generalNotes` — each mode's resolved semantic tokens must appear in a dedicated variant section.
+**Every mode must be rendered as its own section(s).** Do not document modes only in `generalNotes` — each mode's resolved semantic tokens must appear in a dedicated variant section. Create one section per Type × Mode combination (e.g., 2 types × 11 modes = 22 sections named "Primary / Gray", "Primary / Orange", etc.).
 
-**Strategy A (when both gates are not met):** When colors are mode-controlled but the two-gate model does not indicate Strategy B (e.g., modes × types ≤ 6), create a separate variant entry for each mode:
+Apply the **Decision Logic (Two-Gate Model)** from the Rendering Strategies section above to choose Strategy A or B. For components with many modes (e.g., Tag with 11), Gate 1 passes (modes are a non-state multiplier) and Gate 2 typically passes (section count far exceeds 6), so Strategy B applies. For components with few modes (e.g., 2 modes × 3 states = 6 sections), Gate 2 may not pass — use Strategy A.
+
+**Strategy A example** (modes × types ≤ 6):
 
 ```json
 {
@@ -600,34 +560,14 @@ Note: Light/Dark theme does not need to be checked. Semantic tokens handle theme
 }
 ```
 
-**Strategy B (when both gates pass):** When the two-gate model indicates Strategy B (non-state multiplier exists AND Strategy A sections > 6), create one section per Type × Mode combination with states as columns. For example, a Tag with 2 types × 11 modes = 22 sections:
+**Strategy B example** (modes × types > 6, states become columns):
 
-```json
-{
-  "renderingStrategy": "B",
-  "stateColumns": ["Enabled", "Hover", "Pressed", "Active", "Disabled"],
-  "collectionId": "VariableCollectionId:6006:13874",
-  "variants": [
-    { "name": "Primary / Gray", "modeId": "6006:2", "tables": [...] },
-    { "name": "Primary / Orange", "modeId": "6006:3", "tables": [...] },
-    { "name": "Secondary / Gray", "modeId": "6006:2", "tables": [...] }
-  ]
-}
-```
+See the full worked example in the **Example: Consolidated Component (Strategy B)** section above.
 
-**Token resolution per mode:** Use `modeDetection.modeTokenMap` from the extraction output to translate generic tokens to semantic tokens for each mode. For example, if the extraction found `Primary/tagBackground`, resolve it via `modeDetection.modeTokenMap["Gray"]["Primary/tagBackground"]` → `Tag/Gray/backgroundPrimary`.
+**Token resolution per mode:** Use `modeTokenMap` from the extraction output to translate generic tokens to semantic tokens for each mode. For example, `Primary/tagBackground` → `Tag/Gray/backgroundPrimary` for the Gray mode.
 
 **Also add `generalNotes`** explaining the mode-controlled behavior at a high level:
 - `"Color variants (Gray, Orange, Yellow, ...) are controlled via 'Tag color' variable mode at the container level. Size and Behavior axes do not affect color tokens."`
-
-### Why This Matters
-
-Variable mode colors are easy to miss because:
-- They don't appear as traditional Figma variants in the component set
-- The component may appear to have only one color variant when inspected normally
-- Mode names in the variable collection reveal the actual color options
-
-Always run `figma_get_variables` for components that likely have semantic color variants (tags, badges, alerts, status indicators).
 
 ---
 
@@ -813,6 +753,6 @@ Before proceeding to the rendering steps, verify:
 - **Curly quotes:** Use straight quotes `"` not `""`—JSON requires ASCII
 - **Missing component color modes:** Not checking `figma_get_variables` for components like Tag, Badge, or Alert that likely have semantic color variants (Success, Warning, Error) controlled via variable modes
 - **Rendering only one mode:** When a component has multiple color modes (e.g., 11 Tag color modes), every mode must have its own section(s) with resolved semantic tokens — do not document only the default mode and describe the rest in `generalNotes`
-- **Missing boolean-gated elements:** Not merging `booleanDelta.delta` when `deltaCount > 0`. The consolidated extraction automatically discovers elements hidden behind boolean toggles (INSTANCE_SWAP swaps, deferred fills, nested frames) by diffing an all-booleans-enabled instance against the baseline. The extraction also enables nested instance booleans (sub-component boolean props) and force-shows all hidden descendants via `directUnhide`, so elements behind nested toggles (icons, clear buttons, prefix/suffix content) are fully discovered
+- **Missing boolean-gated elements:** Not merging `booleanDelta.delta` when `deltaCount > 0`. Elements hidden behind boolean toggles (icons, clear buttons, prefix/suffix content) must be accounted for — check the extraction output's `booleanDelta` field
 - **Discarding sub-component tokens:** Not showing actual tokens for entries with `subComponentName`. Always include real token data — use `subComponentName` for richer notes and element names, never as a signal to replace tokens with references. These fields are deterministic — do not rely on AI guesswork from layer names alone
 

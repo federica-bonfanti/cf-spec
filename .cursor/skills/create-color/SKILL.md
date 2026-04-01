@@ -26,7 +26,7 @@ Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for ever
 
 **`figma-mcp` requires `fileKey` on every call.** Extract it once from the user's Figma URL at the start of the workflow. For branch URLs (`figma.com/design/:fileKey/branch/:branchKey/:fileName`), use `:branchKey` as the fileKey.
 
-**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, descendant nodes (text, instances) may not be fully loaded — methods like `getRangeAllFontNames`, `findAll`, or `characters` can fail with `TypeError`. Insert this page-loading block immediately after `getNodeByIdAsync`:
+**`figma-mcp` page context:** `use_figma` resets `figma.currentPage` to the first page on every call. When a script accesses a node from a previous step via `getNodeByIdAsync(ID)`, the page content may not be loaded — `findAll`, `findOne`, and `characters` will fail with `TypeError` until the page is activated. Insert this page-loading block immediately after `getNodeByIdAsync`:
 
 ```javascript
 let _p = node; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
@@ -450,63 +450,27 @@ Using the consolidated extraction output from Step 4b, perform the following int
 
 #### Step 4c-i: Determine Rendering Strategy
 
-Using `axisClassification` from the extraction output and `modeDetection` from the extraction output, choose one of two rendering strategies:
+Using `axisClassification` and `modeDetection` from the extraction output, choose a rendering strategy by following the **Rendering Strategies** and **Decision Logic (Two-Gate Model)** sections in the instruction file.
 
-**Strategy A — Simple (single-state sections):**
-- Default strategy — use unless Strategy B conditions are met
-- Layout: One section per variant, each with preview + single table
-- Table columns: `Element | Token | Notes`
-- This is the current behavior with the column header corrected from "State" to "Token"
-
-**Strategy B — Consolidated (multi-column table with states as columns):**
-- Use only when a non-state color-relevant multiplier exists AND Strategy A would produce > 6 sections
-- Layout: One section per color-relevant NON-state axis value × mode combination (e.g., "Primary / Gray", "Secondary / Orange")
-- Table columns: `Element | {State1} | {State2} | ... | {StateN} | Notes`
-- States become column headers instead of separate sections
-- Without a non-state multiplier, Strategy B collapses everything into a single mega-section — always use Strategy A in that case
-
-**Decision logic (two-gate model):**
-
-1. Identify color-relevant axes (from `axisClassification` where `colorRelevant: true`) and the state axis (where `isState: true`)
-2. **Gate 1 — Viability:** A non-state color-relevant multiplier must exist. This means at least one of:
-   - A mode-controlled collection with 2+ modes (`modeDetection.hasModeCollection` with `modes.length >= 2`)
-   - A non-state color-relevant axis with 2+ values (e.g., Type: Primary/Secondary)
-   - **If no non-state multiplier exists → Strategy A** (regardless of section count)
-3. **Gate 2 — Benefit:** Calculate Strategy A section count = product of ALL color-relevant axis value counts (including states) × number of modes (if mode-controlled)
-   - If Strategy A sections ≤ 6 → **Strategy A**
-   - If Strategy A sections > 6 → **Strategy B** (states become columns)
-4. **Soft guidance:** If the state axis has > 6-7 values, Strategy B would produce very wide tables. Consider whether Strategy A with many sections would actually be more readable.
+**Template note:** Strategy A renames the template's `#state-title` column header from "State" to "Token" at render time.
 
 If Strategy B, also record:
 - `stateAxisName`: name of the state axis (e.g., "State")
 - `stateValues`: ordered list of state values (columns)
 - `nonStateAxes`: the remaining color-relevant axes whose combinations form sections
 
-**Decision examples:**
-
-| Component  | States | Non-state multiplier | Gate 1 | Gate 2  | Result                      |
-| ---------- | ------ | -------------------- | ------ | ------- | --------------------------- |
-| Text Field | 11     | None                 | FAIL   | --      | **A** (11 sections)         |
-| Button     | 4      | None                 | FAIL   | --      | **A** (4 sections)          |
-| Tag        | 5      | 2 types × 11 modes   | PASS   | 110 > 6 | **B** (22 sections, 5 cols) |
-| Badge      | 3      | 5 modes              | PASS   | 15 > 6  | **B** (5 sections, 3 cols)  |
-| Switch     | 4      | None                 | FAIL   | --      | **A** (4 sections)          |
-
 #### Step 4c-ii: Build Variant Reduction Plan
 
-Based on the strategy, determine which sections to render:
+Based on the strategy chosen in Step 4c-i, determine which sections to render. Follow the **Variable Mode Colors** section in the instruction file for mode-controlled components and the **Color-Irrelevant Axes** section for axis filtering.
 
 - **Color-irrelevant axes**: Pick one representative value (typically the default). Never create sections for these axes.
 - **Strategy A sections**: List each color-relevant axis combination as a section.
 - **Strategy B sections**: List each non-state color-relevant combination as a section, with all state values as columns within each section.
 
-**Mode-controlled expansion (critical):** If `modeDetection.hasModeCollection` is true, **every mode must be rendered as its own section(s)**. Do NOT collapse modes into `generalNotes` only.
-
-- Create one section per **non-state-axis-value × mode** combination. For example, if the non-state color-relevant axis is `Type` with values `[Primary, Secondary]` and there are 11 modes, create 22 sections: "Primary / Gray", "Primary / Orange", ..., "Secondary / Gray", etc.
-- Section name format: `"{TypeValue} / {ModeName}"`
-- For each section, use the `modeDetection.modeTokenMap[modeName]` to resolve every generic token (from `variantColorData`) to its semantic alias. For example, `Primary/tagBackground` → `Tag/Gray/backgroundPrimary` for the Gray mode.
+**Mode-controlled components:** If `modeDetection.hasModeCollection` is true:
 - Record the `collectionId` from `modeDetection` on the top-level data structure.
 - Record the `modeId` for each section so the rendering step can apply the correct variable mode to preview instances.
+- Use `modeDetection.modeTokenMap[modeName]` to resolve generic tokens to semantic aliases per mode.
 
 **Optional re-extraction:** If the component is complex (many variants) and Step 4b was run with `SKIP_AXES = {}`, re-run Step 4b now with `__SKIP_AXES_JSON__` populated with the color-irrelevant axes identified above (e.g., `{"Size": "Medium", "Density": "Default"}`) to get a focused dataset. For components with few variants (≤ 10), there is no need to re-run.
 
@@ -514,40 +478,11 @@ Use the extraction output fields directly — `compSetNodeId` for creating live 
 
 ### Step 7: Organize Analysis into Structured Data
 
-Follow the data structure reference in the instruction file. Build an internal working model that feeds directly into the Figma rendering steps — no JSON output artifact is needed.
+Follow the **Data Structure Reference** in the instruction file — use the Strategy A (`ColorAnnotationData`) or Strategy B (`ConsolidatedColorAnnotationData`) interfaces. Build an internal working model that feeds directly into the Figma rendering steps — no JSON output artifact is needed.
 
-The data structure depends on the rendering strategy chosen in Step 4c-i:
-
-#### Strategy A (Simple)
-
-- `componentName`: string
-- `generalNotes`: string (optional)
-- `renderingStrategy`: `"A"`
-- `variants`: array, each with:
-  - `name`: string (variant/state name)
-  - `variantProperties`: object (optional — mapping Figma property keys to values for instantiating the component preview, when a component set node ID is available)
-  - `tables`: array, each with:
-    - `name`: string (table label, e.g. "Spec" or state name)
-    - `elements`: array, each with `element`, `token`, `notes`
-
-#### Strategy B (Consolidated)
-
-- `componentName`: string
-- `generalNotes`: string (optional)
-- `renderingStrategy`: `"B"`
-- `stateColumns`: string[] (ordered list of state values that become column headers, e.g. `["Enabled", "Hover", "Pressed", "Active", "Disabled"]`)
-- `stateAxisName`: string (Figma variant axis name for states, e.g. `"State"`)
-- `collectionId`: string or null (variable collection ID for mode-controlled colors, e.g. `"VariableCollectionId:6006:13874"`)
-- `variants`: array, each with:
-  - `name`: string ("{Type} / {Mode}" for mode-controlled, e.g. "Primary / Gray"; or non-state axis value for simple, e.g. "Primary")
-  - `modeId`: string or null (variable mode ID for this section, e.g. `"6006:2"` for Gray)
-  - `variantProperties`: object (optional — mapping Figma property keys to values for the base/rest state of this combination)
-  - `tables`: array, each with:
-    - `name`: string (table label, typically "Spec")
-    - `elements`: array, each with:
-      - `element`: string (UI element name)
-      - `tokensByState`: object mapping state name → token (e.g. `{"Enabled": "Tag/Gray/backgroundPrimary", "Disabled": "Tag/Gray/backgroundStateDisabled"}`)
-      - `notes`: string (3-8 word description)
+Rendering-critical fields consumed by Step 11 scripts:
+- `variantProperties` — maps Figma property keys to values for `setProperties()` on preview instances
+- `collectionId` / `modeId` (Strategy B only) — passed to rendering scripts for `setExplicitVariableModeForCollection`
 
 ### Step 8: Audit
 
@@ -589,15 +524,15 @@ const textNodes = frame.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const compNameFrame = frame.findOne(n => n.name === '#compName');
 if (compNameFrame) {
@@ -656,15 +591,15 @@ const textNodes = variant.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 // Set variant title
 const titleFrame = variant.findOne(n => n.name === '#variant-title');
@@ -873,15 +808,15 @@ const textNodes = variant.findAll(n => n.type === 'TEXT');
 const fontSet = new Set();
 const fontsToLoad = [];
 for (const tn of textNodes) {
-  if (tn.characters.length > 0) {
-    const fonts = tn.getRangeAllFontNames(0, tn.characters.length);
-    for (const f of fonts) {
-      const key = f.family + '|' + f.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(f); }
+  try {
+    const fn = tn.fontName;
+    if (fn && fn !== figma.mixed && fn.family) {
+      const key = fn.family + '|' + fn.style;
+      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
     }
-  }
+  } catch {}
 }
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f)));
+await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 
 const titleFrame = variant.findOne(n => n.name === '#variant-title');
 if (titleFrame) {

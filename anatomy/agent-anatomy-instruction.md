@@ -22,15 +22,15 @@ Each element carries these pre-resolved fields:
 - **`classification`** — Closed enum from the extraction script:
   - `instance` — direct INSTANCE child
   - `instance-unwrapped` — FRAME/GROUP that wrapped a single INSTANCE descendant; already unwrapped to show the inner sub-component
-  - `text` — TEXT node
+  - `text` — TEXT node (includes FRAME-wrapped single TEXT nodes, where `originalName` is the FRAME name)
   - `slot` — SLOT node (composable slot container accepting child components via code)
   - `container` — FRAME/GROUP with multiple children (genuine layout container)
   - `structural` — RECTANGLE, VECTOR, ELLIPSE, LINE, POLYGON, STAR, BOOLEAN_OPERATION, or empty FRAME
 - **`controlledByBoolean`** — `{ propName, rawKey, defaultValue }` or `null`. Resolved by element index in the extraction script — not name matching.
 - **`wrappedInstance`** — Component info for the inner INSTANCE (only on `instance-unwrapped` elements): `{ mainComponentId, mainComponentSetId, childIsComponentSet, componentSetName, childVariantCount, childVariantAxes }`
-- **`originalName`** — The FRAME name before unwrapping (only on `instance-unwrapped` elements)
+- **`originalName`** — The FRAME name before unwrapping (on `instance-unwrapped` and FRAME-wrapped `text` elements)
 - **`shouldCreateSection`** — `true` for `instance`/`instance-unwrapped`, `false` for utility names and other types
-- **`name`** — Element display name. For `instance-unwrapped`, this is the inner sub-component's `componentSetName`.
+- **`name`** — Element display name (the designer-facing layer name). For `instance-unwrapped`, this is the wrapper frame's name (e.g., "Thumb"), not the inner component's name — the inner component name is in `wrappedInstance.componentSetName`. For `text` elements unwrapped from a FRAME, this is the FRAME name.
 - **`nodeType`** — `'INSTANCE'` for both `instance` and `instance-unwrapped`; `'TEXT'` for `text`; Figma type for others
 - **`visible`**, **`bbox`**, **`index`**
 - **`mainComponentSetId`**, **`mainComponentId`**, **`childIsComponentSet`**, **`childVariantAxes`**, **`childVariantCount`**

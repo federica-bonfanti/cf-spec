@@ -188,7 +188,6 @@ async function extractElement(node, index, artworkAbsX, artworkAbsY) {
       if (info) {
         element.wrappedInstance = info;
         element.originalName = element.name;
-        element.name = info.componentSetName;
         element.nodeType = 'INSTANCE';
         element.classification = 'instance-unwrapped';
         Object.assign(element, {
@@ -198,11 +197,22 @@ async function extractElement(node, index, artworkAbsX, artworkAbsY) {
           childVariantAxes: info.childVariantAxes,
           childVariantCount: info.childVariantCount
         });
-        element.notes = info.componentSetName + ' instance';
+        element.notes = element.name + ' instance';
       } else {
         element.classification = 'container';
         const childCount = ('children' in node) ? node.children.length : 0;
         element.notes = 'Container with ' + childCount + ' children';
+      }
+    } else if ('children' in node && node.children.length === 1 && node.children[0].type === 'TEXT') {
+      const textChild = node.children[0];
+      element.originalName = element.name;
+      element.nodeType = 'TEXT';
+      element.classification = 'text';
+      const content = textChild.characters || '';
+      if (content.length > 0 && content.length <= 30) {
+        element.notes = 'Text element \u2014 "' + content + '"';
+      } else {
+        element.notes = 'Text element';
       }
     } else {
       const childCount = ('children' in node) ? node.children.length : 0;
@@ -402,9 +412,10 @@ Save the returned JSON — you will use `componentName`, `compSetNodeId`, `selec
 
 Each element carries pre-resolved fields:
 - `classification` — closed enum: `instance`, `instance-unwrapped`, `text`, `slot`, `container`, `structural`
+- `name` — the designer-facing layer name. For `instance-unwrapped`, this is the wrapper frame's name (e.g., "Thumb"), not the inner component's name. For `text` classification from a FRAME-wrapped TEXT node, this is the FRAME name (e.g., "Label"). The inner component name is available in `wrappedInstance.componentSetName`.
 - `controlledByBoolean` — `{ propName, rawKey, defaultValue }` or `null` (resolved by element index, not name matching)
-- `wrappedInstance` — component info for the inner INSTANCE (only on `instance-unwrapped` elements)
-- `originalName` — the FRAME name before unwrapping (only on `instance-unwrapped` elements)
+- `wrappedInstance` — component info for the inner INSTANCE (only on `instance-unwrapped` elements): includes `componentSetName` (the inner component's name used by Step 8b for child section creation)
+- `originalName` — the FRAME name before unwrapping (on `instance-unwrapped` and FRAME-wrapped `text` elements)
 - `shouldCreateSection` — `true` for `instance`/`instance-unwrapped`, `false` for utility names and other types
 - `childVariantAxes`, `childVariantCount` — variant data from the child component set
 
@@ -804,22 +815,32 @@ for (const el of elements) {
     const instIcon = indicator.findOne(n => n.name === '#instance');
     const textIcon = indicator.findOne(n => n.name === '#text');
     const slotIcon = indicator.findOne(n => n.name === '#slot');
+    const frameIcon = indicator.findOne(n => n.name === '#frame');
     if (el.nodeType === 'INSTANCE') {
       if (instIcon) instIcon.visible = true;
       if (textIcon) textIcon.visible = false;
       if (slotIcon) slotIcon.visible = false;
+      if (frameIcon) frameIcon.visible = false;
     } else if (el.nodeType === 'TEXT') {
       if (instIcon) instIcon.visible = false;
       if (textIcon) textIcon.visible = true;
       if (slotIcon) slotIcon.visible = false;
+      if (frameIcon) frameIcon.visible = false;
     } else if (el.nodeType === 'SLOT' || el.classification === 'slot') {
       if (instIcon) instIcon.visible = false;
       if (textIcon) textIcon.visible = false;
       if (slotIcon) slotIcon.visible = true;
+      if (frameIcon) frameIcon.visible = false;
+    } else if (el.nodeType === 'FRAME' || el.nodeType === 'GROUP') {
+      if (instIcon) instIcon.visible = false;
+      if (textIcon) textIcon.visible = false;
+      if (slotIcon) slotIcon.visible = false;
+      if (frameIcon) frameIcon.visible = true;
     } else {
       if (instIcon) instIcon.visible = false;
       if (textIcon) textIcon.visible = false;
       if (slotIcon) slotIcon.visible = false;
+      if (frameIcon) frameIcon.visible = false;
     }
   }
 
@@ -1240,22 +1261,32 @@ for (const el of gcElementsGrouped) {
     const instIcon = indicator.findOne(n => n.name === '#instance');
     const textIcon = indicator.findOne(n => n.name === '#text');
     const slotIcon = indicator.findOne(n => n.name === '#slot');
+    const frameIcon = indicator.findOne(n => n.name === '#frame');
     if (el.nodeType === 'INSTANCE') {
       if (instIcon) instIcon.visible = true;
       if (textIcon) textIcon.visible = false;
       if (slotIcon) slotIcon.visible = false;
+      if (frameIcon) frameIcon.visible = false;
     } else if (el.nodeType === 'TEXT') {
       if (instIcon) instIcon.visible = false;
       if (textIcon) textIcon.visible = true;
       if (slotIcon) slotIcon.visible = false;
+      if (frameIcon) frameIcon.visible = false;
     } else if (el.nodeType === 'SLOT') {
       if (instIcon) instIcon.visible = false;
       if (textIcon) textIcon.visible = false;
       if (slotIcon) slotIcon.visible = true;
+      if (frameIcon) frameIcon.visible = false;
+    } else if (el.nodeType === 'FRAME' || el.nodeType === 'GROUP') {
+      if (instIcon) instIcon.visible = false;
+      if (textIcon) textIcon.visible = false;
+      if (slotIcon) slotIcon.visible = false;
+      if (frameIcon) frameIcon.visible = true;
     } else {
       if (instIcon) instIcon.visible = false;
       if (textIcon) textIcon.visible = false;
       if (slotIcon) slotIcon.visible = false;
+      if (frameIcon) frameIcon.visible = false;
     }
   }
 

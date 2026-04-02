@@ -3,6 +3,40 @@ title: "Changelog"
 description: "Product updates and release history"
 ---
 
+<Update label="V1.6.2 — April 2026" description="FRAME-wrapped text detection, frame icon indicators, and effect style consolidation">
+  ## uSpec V1.6.2
+
+  Anatomy now detects FRAME-wrapped TEXT nodes and displays a dedicated frame icon indicator, while color consolidates effect style entries into a single token reference.
+
+  ### FRAME-wrapped TEXT detection (Anatomy)
+
+  - Frames containing a single TEXT child are now classified as `text` instead of `container` — the frame name is preserved in `originalName` and the element carries `nodeType: 'TEXT'`
+  - Short text content (up to 30 characters) is included in the element notes for richer context in the attribute table
+  - Applies to both extraction and the `name` / `originalName` documentation in the instruction file
+
+  ### Frame icon indicator (Anatomy)
+
+  - New `#frame` indicator icon for FRAME and GROUP node types, added alongside the existing `#instance`, `#text`, and `#slot` icons
+  - Applied to both composition-level and per-child artwork rendering scripts — FRAME/GROUP elements now display their own icon instead of falling through to the default (no icon) case
+
+  ### Name field semantics (Anatomy)
+
+  - `name` now consistently returns the designer-facing layer name across all classifications
+  - For `instance-unwrapped` elements, `name` is the wrapper frame's name (e.g., "Thumb") — the inner component name is available via `wrappedInstance.componentSetName`
+  - Previously, unwrapped instances overwrote `name` with the inner component's `componentSetName`, losing the original frame label
+
+  ### Effect style consolidation (Color)
+
+  - When a node has an `effectStyleId`, extraction now emits a single `"effect style"` entry with the style name as the token, instead of iterating individual shadow layers
+  - Individual `drop shadow` / `inner shadow` entries are still emitted when no effect style is applied
+  - The `variantColorData` contract documents the new `"effect style"` property value and its semantics
+
+  ### Effect and elevation token category (Color)
+
+  - Added `Effect/Elevation` row to the token-naming reference table with common style names (`low`, `medium`, `high`)
+  - Added `Effects` row to the element-naming reference table with common layer names (`Shadow`, `Elevation`, `Drop shadow`)
+</Update>
+
 <Update label="V1.6.1 — April 2026" description="Improved component anatomy and voice reader annotation">
   ## uSpec V1.6.1
 

@@ -173,20 +173,25 @@ async function extractColorBindings(node, path) {
   }
 
   if (node.effects && Array.isArray(node.effects)) {
-    for (const effect of node.effects) {
-      if (effect.visible === false) continue;
-      if (effect.color) {
-        const hex = rgbToHex(effect.color);
-        let token = effect.boundVariables?.color
-          ? await resolveVariableToken(effect.boundVariables.color)
-          : null;
-        if (!token && node.effectStyleId && node.effectStyleId !== '' && typeof node.effectStyleId === 'string') {
-          try { const style = await figma.getStyleByIdAsync(node.effectStyleId); if (style) token = style.name; } catch {}
+    let effectStyleName = null;
+    if (node.effectStyleId && node.effectStyleId !== '' && typeof node.effectStyleId === 'string') {
+      try { const style = await figma.getStyleByIdAsync(node.effectStyleId); if (style) effectStyleName = style.name; } catch {}
+    }
+    if (effectStyleName) {
+      entries.push({ element: elementName, property: 'effect style', hex: '', token: effectStyleName, opacity: 1 });
+    } else {
+      for (const effect of node.effects) {
+        if (effect.visible === false) continue;
+        if (effect.color) {
+          const hex = rgbToHex(effect.color);
+          let token = effect.boundVariables?.color
+            ? await resolveVariableToken(effect.boundVariables.color)
+            : null;
+          const effectType = effect.type === 'DROP_SHADOW' ? 'drop shadow'
+            : effect.type === 'INNER_SHADOW' ? 'inner shadow'
+            : effect.type;
+          entries.push({ element: elementName, property: effectType, hex, token, opacity: effect.color.a });
         }
-        const effectType = effect.type === 'DROP_SHADOW' ? 'drop shadow'
-          : effect.type === 'INNER_SHADOW' ? 'inner shadow'
-          : effect.type;
-        entries.push({ element: elementName, property: effectType, hex, token, opacity: effect.color.a });
       }
     }
   }
@@ -423,7 +428,7 @@ Save the returned JSON. This consolidated extraction provides:
 - `variantAxes` — variant axis names and their options, for mapping variant sections to Figma property keys
 - `propertyDefs` — exact Figma property keys (including `#nodeId` suffixes) for `setProperties()` when placing preview instances
 - `variantCount` / `sampledCount` / `skippedAxes` — extraction scope metadata
-- `variantColorData` — per-variant array of `colorEntries`, each with `element`, `property`, `hex`, `token`, `opacity`, and optional `subComponentName` (string) identifying which nested component the entry belongs to (e.g., `"Button"`). Always show the actual token; use `subComponentName` for richer notes
+- `variantColorData` — per-variant array of `colorEntries`, each with `element`, `property` (fill, text fill, stroke, drop shadow, inner shadow, or effect style), `hex`, `token`, `opacity`, and optional `subComponentName` (string) identifying which nested component the entry belongs to (e.g., `"Button"`). Always show the actual token; use `subComponentName` for richer notes. When `property` is `"effect style"`, the entry represents a composed effect style (e.g., a shadow style) — the `token` is the style name and individual shadow layers are not emitted
 - `axisClassification` — per-axis classification with `isState`, `colorRelevant`, and `tokenSetsByValue`
 - `booleanDelta` — elements discovered behind boolean toggles (`deltaCount`, `delta` entries, `booleanPropsToggled`)
 - `modeDetection` — mode-controlled collection info (`hasModeCollection`, `collectionName`, `collectionId`, `modes`, `modeIds`, `modeTokenMap`)

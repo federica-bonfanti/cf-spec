@@ -511,6 +511,7 @@ Note: This produces one section per Type × Mode combination (e.g., 2 types × 1
 | State layers | hoverOverlayAlpha, pressedOverlayAlpha, focusOverlayAlpha |
 | Interactive | interactivePrimary, interactiveSecondary |
 | Feedback | negativePrimary, positivePrimary, warningPrimary |
+| Effect/Elevation | low, medium, high (effect style names vary per design system) |
 
 ---
 
@@ -581,6 +582,7 @@ Use these names to match Figma layer names:
 | Text | Primary labels, Secondary labels, Title, Description, Label |
 | Visual | stroke, Icon, Artwork, Indicator, Checkmark |
 | State | State layer, State layer (backplate), Focus ring, Overlay |
+| Effects | Shadow, Elevation, Drop shadow |
 
 ---
 

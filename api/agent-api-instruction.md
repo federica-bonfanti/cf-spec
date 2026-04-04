@@ -279,15 +279,21 @@ Used when a slot has interchangeable content options (e.g., `leadingContentType:
 - "Leading content — Avatar"
 - "Trailing content — Button"
 
+**Description convention:** When the slot content is an instance of a known component (identified via extraction data from `slotProps` or `composableChildren`), the description **must** reference the source component:
+- `"Instance of [Component]. See [Component] API for full details."` — when contextual defaults match the standalone defaults
+- `"Instance of [Component]. See [Component] API for full details. Defaults below reflect contextual overrides for this slot."` — when the designer has set overrides that differ from the standalone component's global defaults
+
+**Contextual defaults:** The `default` column in sub-component tables must reflect the values the designer set **in this slot context**, not the component's standalone global defaults. Use the extraction data (`slotProps[].defaultChildren[].contextualOverrides` or `composableChildren[].contextualOverrides`) to populate these. When a contextual default differs from the standalone default, note the standalone default in the `notes` field (e.g., `"Contextual default; standalone default is medium"`).
+
 **Example:**
 ```json
 {
-  "name": "Leading content — Avatar",
-  "description": "Configuration when leadingContentType is avatar.",
+  "name": "Trailing content — Button",
+  "description": "Instance of Button. See Button API for full details. Defaults below reflect contextual overrides for this slot.",
   "properties": [
-    { "property": "size", "values": "36x, 48x, 64x", "required": false, "default": "36x", "notes": "Avatar diameter" },
-    { "property": "imageSource", "values": "string", "required": true, "default": "–", "notes": "URL or local path to avatar image" },
-    { "property": "fallbackText", "values": "string", "required": false, "default": "–", "notes": "Initials shown when image fails to load" }
+    { "property": "label", "values": "string", "required": true, "default": "–", "notes": "Button text" },
+    { "property": "variant", "values": "primary, secondary, tertiary", "required": false, "default": "tertiary", "notes": "Contextual default; standalone default is primary" },
+    { "property": "size", "values": "small, medium", "required": false, "default": "small", "notes": "Contextual default; standalone default is medium" }
   ]
 }
 ```
@@ -308,13 +314,13 @@ Not every component needs this. A Button with a leading icon does **not** need a
 - "Input"
 - "Hint text"
 
-**Description:** Note the relationship to the parent, e.g., "Always-present child component. See Label spec for full details."
+**Description:** Note the relationship to the parent and reference the source component: `"Always-present child. Instance of [Component]. See [Component] API for full details."` When the parent applies contextual overrides, append: `"Defaults below reflect contextual overrides."` Use extraction data (`composableChildren[].contextualOverrides`) the same way as Pattern A.
 
 **Example:**
 ```json
 {
   "name": "Label",
-  "description": "Always-present child. See Label spec for full component details.",
+  "description": "Always-present child. Instance of Label. See Label API for full details.",
   "properties": [
     { "property": "text", "values": "string", "required": true, "default": "–", "notes": "Label text content" },
     { "property": "isRequired", "values": "true, false", "required": false, "default": "false", "notes": "Shows required indicator" }
@@ -334,7 +340,7 @@ This matches how engineers think about the component: fixed composition first, t
 
 - The content type has no configurable properties (e.g., a simple chevron icon)
 - The content type is `none` (nothing to configure)
-- The sub-component is fully documented elsewhere (add note: "See full [Component] API")
+- The sub-component is fully documented elsewhere — skip the table and add a note in the parent property's `notes` field: `"Instance of [Component]. See [Component] API for full details."`
 
 ### Which Properties to Include
 
@@ -481,6 +487,8 @@ Before returning the JSON, verify:
 | ☐ **No event handlers** | `onPress`, `onChange`, `onSelectionChange`, etc. are omitted — these are code-level concerns, not design properties |
 | ☐ **No unnecessary `key` on array items** | Array items do not include a `key` property unless stable IDs differing from labels are specifically required |
 | ☐ **Straight quotes** | JSON uses ASCII `"` not curly quotes `""` |
+| ☐ **Slot content defaults are contextual** | Sub-component table defaults reflect the values set by the designer in this slot context, not the standalone component's global defaults. Use extraction data (`slotProps[].defaultChildren[].contextualOverrides` or `composableChildren[].contextualOverrides`) to populate defaults. Note standalone defaults in `notes` when they differ |
+| ☐ **Sub-component descriptions reference source** | Every sub-component table description identifies the source component: "Instance of [Component]. See [Component] API for full details." Append contextual-overrides notice when defaults differ from standalone |
 
 ---
 
@@ -522,6 +530,8 @@ Before returning the JSON, verify:
 - **Guessed default values:** Use `"–"` if the default is unknown
 - **Non-configurable properties included:** Skip internal/private props not exposed to consumers
 - **Example table doesn't reflect preview state:** When an example uses `childOverrides` to configure child instances (e.g., selecting multiple items, changing size or layout), the table must include matching `item N propertyName` rows so the preview and table tell the same story
+- **Global defaults used instead of contextual:** Sub-component tables must use the contextual defaults from extraction data (`slotProps[].defaultChildren[].contextualOverrides` or `composableChildren[].contextualOverrides`), not the standalone component's global defaults. A Button in a trailing slot may default to `tertiary` / `small` even though the standalone Button defaults to `primary` / `medium`
+- **Missing source component reference:** Every sub-component table description must identify the source component ("Instance of [Component]. See [Component] API for full details.") so engineers know where to find the complete API
 
 ---
 
@@ -624,7 +634,7 @@ This example demonstrates the **slot content type pattern**: using enums with `n
   "subComponentTables": [
     {
       "name": "Leading content — Icon",
-      "description": "Configuration when leadingContentType is icon.",
+      "description": "Instance of Icon. See Icon API for full details.",
       "properties": [
         { "property": "icon", "values": "IconName", "required": true, "default": "–", "notes": "Icon from iconography library" },
         { "property": "size", "values": "20x, 24x, 28x", "required": false, "default": "20x", "notes": "Icon size" },
@@ -633,7 +643,7 @@ This example demonstrates the **slot content type pattern**: using enums with `n
     },
     {
       "name": "Leading content — Avatar",
-      "description": "Configuration when leadingContentType is avatar.",
+      "description": "Instance of Avatar. See Avatar API for full details.",
       "properties": [
         { "property": "size", "values": "36x, 48x, 64x", "required": false, "default": "36x", "notes": "Avatar diameter" },
         { "property": "imageSource", "values": "string", "required": false, "default": "–", "notes": "URL or local path to avatar image" },
@@ -643,7 +653,7 @@ This example demonstrates the **slot content type pattern**: using enums with `n
     },
     {
       "name": "Leading content — Image",
-      "description": "Configuration when leadingContentType is image.",
+      "description": "Instance of Image. See Image API for full details.",
       "properties": [
         { "property": "size", "values": "36x, 48x, 64x, 80x", "required": false, "default": "36x", "notes": "Image dimensions" },
         { "property": "imageSource", "values": "string", "required": true, "default": "–", "notes": "URL or local path to image" },
@@ -652,16 +662,16 @@ This example demonstrates the **slot content type pattern**: using enums with `n
     },
     {
       "name": "Trailing content — Button",
-      "description": "Configuration when trailingContentType is button. See full Button API.",
+      "description": "Instance of Button. See Button API for full details. Defaults below reflect contextual overrides for this slot.",
       "properties": [
         { "property": "label", "values": "string", "required": true, "default": "–", "notes": "Button text" },
-        { "property": "variant", "values": "primary, secondary, tertiary", "required": false, "default": "tertiary", "notes": "Button style" },
-        { "property": "size", "values": "small, medium", "required": false, "default": "small", "notes": "Button size" }
+        { "property": "variant", "values": "primary, secondary, tertiary", "required": false, "default": "tertiary", "notes": "Contextual default; standalone default is primary" },
+        { "property": "size", "values": "small, medium", "required": false, "default": "small", "notes": "Contextual default; standalone default is medium" }
       ]
     },
     {
       "name": "Trailing content — Switch",
-      "description": "Configuration when trailingContentType is switch. See full Switch API.",
+      "description": "Instance of Switch. See Switch API for full details.",
       "properties": [
         { "property": "isOn", "values": "true, false", "required": false, "default": "false", "notes": "Switch state" },
         { "property": "isDisabled", "values": "true, false", "required": false, "default": "false", "notes": "Disables interaction" }

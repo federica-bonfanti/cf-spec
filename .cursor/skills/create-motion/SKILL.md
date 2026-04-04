@@ -479,9 +479,17 @@ return { success: true, rowCount: ROWS.length };
    - Header fields show the correct component name, description, and composition meta
 3. If issues are found, fix via `figma_execute` and re-capture (up to 3 iterations)
 
+### Step 15: Completion Link
+
+Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (extracted from the user's destination URL, or the current file if no destination was provided) and the `frameId` (returned by Step 8), replacing `:` with `-` in the node ID:
+
+```
+Motion spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameId}
+```
+
 ## Notes
 
 - The motion spec template key is stored in `uspecs.config.json` under `templateKeys.motionSpec` and is configured via `@firstrun`.
-- Unlike other skills, motion spec data comes from the clipboard (After Effects export), not from Figma MCP extraction. There is no component to inspect in Figma.
+- Unlike other skills, motion spec data comes from the clipboard (After Effects export), not from Figma MCP extraction. There is no component to inspect in Figma. The spec is placed at viewport center (or on the destination page if a Figma link was provided).
 - `#property-template`, `#bar-template`, and `#table-row-template` may be hidden in the template by default. Clones must set `.visible = true`; originals are hidden after cloning.
 - The `figma_execute` splitting strategy is: 1 call for import+detach, 1 for header, 1 for time ruler, 1 per layer for timeline, 1 for hiding templates, and 1 (or more) for table rows.

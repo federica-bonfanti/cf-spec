@@ -404,6 +404,97 @@ for (const child of enrichedTree) {
 }
 testInst.remove();
 
+// --- Resolve SLOT properties and preferred instances ---
+const slotContents = [];
+const slotPropDefs = {};
+for (const [rawKey, def] of Object.entries(propDefs)) {
+  if (def.type === 'SLOT') slotPropDefs[rawKey] = def;
+}
+
+const hasPreferred = Object.values(slotPropDefs).some(d => d.preferredValues && d.preferredValues.length > 0);
+const allCompKeys = new Map();
+if (hasPreferred) {
+  for (const page of figma.root.children) {
+    try { await figma.setCurrentPageAsync(page); } catch { continue; }
+    const comps = page.findAll(n => n.type === 'COMPONENT' || n.type === 'COMPONENT_SET');
+    for (const c of comps) {
+      if (c.key) allCompKeys.set(c.key, c);
+      if (c.type === 'COMPONENT_SET' && 'children' in c) {
+        for (const v of c.children) { if (v.type === 'COMPONENT' && v.key) allCompKeys.set(v.key, v); }
+      }
+    }
+  }
+  let _rp = node; while (_rp.parent && _rp.parent.type !== 'DOCUMENT') _rp = _rp.parent;
+  if (_rp.type === 'PAGE') await figma.setCurrentPageAsync(_rp);
+}
+
+const slotTestInst = defaultVariant.createInstance();
+if (Object.keys(booleanDefs).length > 0) {
+  const enableAll = {};
+  for (const key of Object.keys(booleanDefs)) enableAll[key] = true;
+  try { slotTestInst.setProperties(enableAll); } catch {}
+}
+
+for (const [rawKey, def] of Object.entries(slotPropDefs)) {
+  const slotName = rawKey.split('#')[0];
+  const slotNode = slotTestInst.findOne(n => n.type === 'SLOT' && n.name === slotName);
+  const entry = {
+    slotName,
+    slotNodeType: 'SLOT',
+    preferredComponents: [],
+    defaultChildren: [],
+    slotDimensions: slotNode ? await extractDimensions(slotNode) : {}
+  };
+
+  if (slotNode && 'children' in slotNode) {
+    for (const sc of slotNode.children) {
+      const scInfo = { name: sc.name, nodeType: sc.type };
+      if (sc.type === 'INSTANCE') {
+        try {
+          const mc = await sc.getMainComponentAsync();
+          if (mc) {
+            scInfo.mainComponentName = mc.name;
+            const isSet = mc.parent && mc.parent.type === 'COMPONENT_SET';
+            scInfo.componentSetName = isSet ? mc.parent.name : mc.name;
+          }
+        } catch {}
+      }
+      entry.defaultChildren.push(scInfo);
+    }
+  }
+
+  if (def.preferredValues && def.preferredValues.length > 0) {
+    for (const pv of def.preferredValues) {
+      if (pv.type !== 'COMPONENT') continue;
+      const compNode2 = allCompKeys.get(pv.key);
+      if (!compNode2) continue;
+      const isSet = compNode2.parent && compNode2.parent.type === 'COMPONENT_SET';
+      const setNode = isSet ? compNode2.parent : compNode2;
+      const prefEntry = {
+        componentKey: pv.key,
+        componentName: compNode2.name,
+        componentId: compNode2.id,
+        componentSetId: isSet ? setNode.id : null,
+        isComponentSet: isSet,
+        variantAxes: {},
+        booleanDefs: {}
+      };
+      if (isSet && setNode.variantGroupProperties) {
+        for (const [k, v] of Object.entries(setNode.variantGroupProperties)) {
+          prefEntry.variantAxes[k] = v.values;
+        }
+      }
+      const prefPropDefs = setNode.componentPropertyDefinitions || {};
+      for (const [pk, pd] of Object.entries(prefPropDefs)) {
+        if (pd.type === 'BOOLEAN') prefEntry.booleanDefs[pk] = pd.defaultValue;
+      }
+      entry.preferredComponents.push(prefEntry);
+    }
+  }
+  slotContents.push(entry);
+}
+slotTestInst.remove();
+
 return {
   componentName: node.name,
   compSetNodeId: TARGET_NODE_ID,
@@ -414,7 +505,8 @@ return {
   variantCount: variantChildren.length,
   variants,
   enrichedTree,
-  subComponents
+  subComponents,
+  slotContents
 };
 ```
 
@@ -427,10 +519,11 @@ Save the returned JSON. The extraction returns:
 - **`variants`** — one per value of each dimension-affecting axis (Size, Density, Shape) at default values for other axes. Each has `name`, `dimensions` (collapsed `{ value, token, display }` tuples), `children`, and `layoutTree`
 - **`enrichedTree`** — full recursive tree from a fully-enabled test instance (all parent booleans `true`). Each node: name, type, visible, dimensions, children, typography, sub-component metadata. INSTANCE nodes at any depth include `mainComponentName` (the variant name, e.g., `"Size=12, Theme=Filled"`) and `parentSetName` (the component set name, e.g., `"checkmark"`) — use `parentSetName` as the icon/component identity.
 - **`subComponents`** — array with `name`, `mainComponentName`, `subCompSetId`, `subCompVariantAxes`, `booleanOverrides`, `dimensions`, `children`, `typography` per sub-component
+- **`slotContents`** — array of SLOT property entries. Each has `slotName`, `slotNodeType`, `preferredComponents` (resolved preferred instances with `componentKey`, `componentName`, `componentId`, `componentSetId`, `isComponentSet`, `variantAxes`, `booleanDefs`), `defaultChildren` (current default slot content), and `slotDimensions` (dimensional properties of the SLOT node itself). Empty array when the component has no SLOT properties.
 
 The instruction file (`agent-structure-instruction.md`) documents how to interpret the data shapes — collapsed dimensions, typography composites, display strings, and logical directions. Refer to it for row emission rules.
 
-You will use `componentName`, `compSetNodeId`, `variantAxes`, `propertyDefs`, `booleanDefs`, `variants`, `enrichedTree`, `subComponents`, and each variant's `layoutTree` in subsequent steps.
+You will use `componentName`, `compSetNodeId`, `variantAxes`, `propertyDefs`, `booleanDefs`, `variants`, `enrichedTree`, `subComponents`, `slotContents`, and each variant's `layoutTree` in subsequent steps.
 
 **4c. Check variable modes:**
 - `figma_get_variables` — **Critical:** Check if any bound tokens have multiple mode values (e.g., Density: compact/default/spacious). Filter by token prefix to find relevant variables. If the extraction script found tokens in `boundVariables`, query those token names to discover multi-mode collections.
@@ -588,6 +681,22 @@ async function measureChildren(container, enableBools) {
   return result;
 }
 
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
 const compSet = await figma.getNodeByIdAsync(TARGET_NODE_ID);
 if (!compSet) return { error: 'Node not found' };
 const isCS = compSet.type === 'COMPONENT_SET';
@@ -609,6 +718,8 @@ for (const [axis, vals] of Object.entries(axes)) {
 
 const rootDimensions = {};
 const subComponentDimensions = {};
+const slotContentDimensions = {};
+const SLOT_CONTENTS = __SLOT_CONTENTS_JSON__;
 
 const sizeValues = sizeAxis ? axes[sizeAxis] : [null];
 for (const sizeVal of sizeValues) {
@@ -641,6 +752,29 @@ for (const sizeVal of sizeValues) {
       };
     }
   }
+
+  for (const slot of SLOT_CONTENTS) {
+    if (!slot.preferredComponents || slot.preferredComponents.length === 0) continue;
+    if (!slotContentDimensions[slot.slotName]) slotContentDimensions[slot.slotName] = {};
+    const slotNode = inst.findOne(n => n.type === 'SLOT' && n.name === slot.slotName);
+    if (!slotNode) continue;
+    for (const pref of slot.preferredComponents) {
+      if (!slotContentDimensions[slot.slotName][pref.componentName]) {
+        slotContentDimensions[slot.slotName][pref.componentName] = {};
+      }
+      const prefComp = await figma.getNodeByIdAsync(pref.componentId);
+      if (!prefComp || prefComp.type !== 'COMPONENT') continue;
+      const prefInst = prefComp.createInstance();
+      while (slotNode.children.length > 0) slotNode.children[0].remove();
+      slotNode.appendChild(prefInst);
+      await loadAllFonts(inst);
+      slotContentDimensions[slot.slotName][pref.componentName][label] = {
+        self: await measureNode(prefInst),
+        slotContext: await measureNode(slotNode)
+      };
+    }
+  }
+
   inst.remove();
 }
 
@@ -660,15 +794,17 @@ if (stateAxis && axes[stateAxis].length > 1) {
 return {
   rootDimensions,
   subComponentDimensions,
+  slotContentDimensions,
   stateComparison,
   sizeAxis: sizeAxis || null,
   stateAxis: stateAxis || null
 };
 ```
 
-Save the returned JSON. Replace `__VARIANT_AXES_JSON__` with the `variantAxes` object from Step 4b extraction. This script provides:
+Save the returned JSON. Replace `__VARIANT_AXES_JSON__` with the `variantAxes` object from Step 4b extraction. Replace `__SLOT_CONTENTS_JSON__` with the `slotContents` array from Step 4b extraction. This script provides:
 - **`rootDimensions`** — keyed by size/variant label, full measurements of the root component at each size (at default state and default values for all other axes). Uses the same representative variant strategy as Step 4b — only one variant per size value, not all permutations.
 - **`subComponentDimensions`** — keyed by sub-component name, then by size label, with `self` (the sub-component's own measurements) and `children` (its internal children's measurements, with booleans enabled). Every sub-component discovered in Step 4b is measured across all sizes.
+- **`slotContentDimensions`** — keyed by slot name → preferred component name → size label, with `self` (the preferred component's measurements after being placed inside the slot) and `slotContext` (the SLOT node's own measurements after content insertion and auto-layout reflow). Only populated when `slotContents` contains entries with `preferredComponents`.
 - **`stateComparison`** — measurements of the root at the default size across all state values. Use this to detect state-conditional properties (e.g., border appears on focus).
 - All measurements use the same collapsed dimensional model as Step 4b: `padding` as uniform / `{ vertical, horizontal }` / `{ top, bottom, start, end }`, collapsed `cornerRadius`, collapsed `strokeWeight`, and `typography` as composite `{ styleName }` or `{ fontSize, fontWeight, ... }`.
 
@@ -703,24 +839,29 @@ Apply these deterministic rules to the extraction and cross-variant data, then v
 
 5. **Layout tree for container hierarchy.** Use the `layoutTree` from the default variant to identify which containers are structurally significant (have their own padding/spacing). Containers that are pass-through wrappers (no padding, no spacing, single child) can be omitted.
 
+6. **Slot preferred content → `slotContent` sections.** For each entry in `slotContents` that has `preferredComponents`, create one section per preferred component. The section name follows the pattern `"{slotName} — {componentName}"` (e.g., "Leading content — Checkbox"). Columns match the parent's size axis. Data source is `slotContentDimensions.{slotName}.{componentName}`. Section description notes the slot relationship: `"Dimensional properties when {componentName} is placed in the {slotName} slot."` Place these sections after regular sub-component sections but before state-conditional sections.
+
 **Produce a `sectionPlan` array** with this shape:
 ```
 sectionPlan = [
   {
-    sectionType: "composition" | "variant" | "subComponent" | "stateConditional",
+    sectionType: "composition" | "variant" | "subComponent" | "stateConditional" | "slotContent",
     sectionName: string,
     sectionDescription: string | null,
     columns: string[],           // e.g., ["Spec", "Large", "Medium", "Small", "Notes"]
     subCompSetId: string | null, // for subComponent sections
     booleanOverrides: object,    // for subComponent sections
     variantAxis: string | null,  // axis name for variant sections
-    dataSource: string           // "rootDimensions" | "subComponentDimensions.Name" | "stateComparison"
+    dataSource: string,          // "rootDimensions" | "subComponentDimensions.Name" | "stateComparison" | "slotContentDimensions.SlotName.CompName"
+    preferredComponentId: string | null,      // for slotContent sections — the preferred component's own component set ID (or component ID if not in a set)
+    preferredComponentSetId: string | null,    // for slotContent sections — the preferred component's component set ID (for preview sourcing)
+    slotName: string | null                   // for slotContent sections — the SLOT property name
   },
   ...
 ]
 ```
 
-**Ordering:** Composition section first (if any), then root/variant sections, then sub-component sections in the order they appear in the enriched tree (visual order: leading → middle → trailing), then state-conditional sections last.
+**Ordering:** Composition section first (if any), then root/variant sections, then sub-component sections in the order they appear in the enriched tree (visual order: leading → middle → trailing), then slot content sections (grouped by slot: leading → trailing, one per preferred component), then state-conditional sections last.
 
 **Then validate the plan against the full data:**
 - Does every auto-layout container in the extraction have its padding and spacing covered by a section?
@@ -749,7 +890,7 @@ Follow the schema in the instruction file:
 **Populating rows from dimensional data:**
 
 For each section in the plan:
-- Look up the `dataSource` to find the right dimensional data object (`rootDimensions`, `subComponentDimensions.Name`, or `stateComparison`).
+- Look up the `dataSource` to find the right dimensional data object (`rootDimensions`, `subComponentDimensions.Name`, `slotContentDimensions.SlotName.CompName`, or `stateComparison`).
 - For each column value (e.g., "Large", "Medium"), read the measurements at that key.
 - Use the `display` field directly from the dimensional data as the cell value — this already handles `"token-name (value)"` vs `"value"` formatting.
 - For collapsed padding: if `padding` is a single value, emit one `padding` row. If `{ vertical, horizontal }`, emit `verticalPadding` and `horizontalPadding` rows. If `{ top, bottom, start, end }`, emit individual `paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd` rows.
@@ -773,7 +914,7 @@ Check your output against each rule. Fix any violations.
 
 ### Step 9: Import and Detach Template
 
-Run via `figma_execute` (replace `__STRUCTURE_TEMPLATE_KEY__` with the key from Step 3, and `__COMPONENT_NAME__` with the component name):
+**If the user provided a cross-file destination URL** (navigated in Step 5), run via `figma_execute`:
 
 ```javascript
 const TEMPLATE_KEY = '__STRUCTURE_TEMPLATE_KEY__';
@@ -789,6 +930,33 @@ figma.currentPage.selection = [frame];
 figma.viewport.scrollAndZoomIntoView([frame]);
 return { frameId: frame.id };
 ```
+
+**If no destination was provided (default)**, run via `figma_execute` — this places the spec on the component's page, to its right:
+
+```javascript
+const TEMPLATE_KEY = '__STRUCTURE_TEMPLATE_KEY__';
+const COMP_NODE_ID = '__COMPONENT_NODE_ID__';
+
+const compNode = await figma.getNodeByIdAsync(COMP_NODE_ID);
+let _p = compNode;
+while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
+if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
+
+const templateComponent = await figma.importComponentByKeyAsync(TEMPLATE_KEY);
+const instance = templateComponent.createInstance();
+const frame = instance.detachInstance();
+
+const GAP = 200;
+frame.x = compNode.x + compNode.width + GAP;
+frame.y = compNode.y;
+
+frame.name = '__COMPONENT_NAME__ Structure';
+figma.currentPage.selection = [frame];
+figma.viewport.scrollAndZoomIntoView([frame]);
+return { frameId: frame.id, pageId: _p.id, pageName: _p.name };
+```
+
+Replace `__COMPONENT_NODE_ID__` with the node ID extracted from the component URL (same as `TARGET_NODE_ID` from Step 4b).
 
 Save the returned `frameId` — you need it for all subsequent steps.
 
@@ -855,6 +1023,7 @@ Before rendering, determine the preview configuration for the current section. T
 | **Composition** (columns show sub-component variant mappings) | `''` | `''` | Size names | Configure each column's specific property combination | `[]` |
 | **Behavior/Configuration** (columns are size names) | `''` | Size axis name | Size names from the axis | `[]` (use default configuration only) | `[]` |
 | **State-conditional** (columns show default vs active state) | `''` | `''` | State names | Set state variant property per column | `[]` |
+| **Slot content** (columns are parent size names showing a preferred component) | The preferred component's own component set ID (`preferredComponentSetId` from the section plan) or `componentId` if not in a set | The preferred component's size axis name (from `slotContents[].preferredComponents[].variantAxes`) | Size names from the **parent's** size axis | `[]` | Boolean properties to enable on each preferred component instance (from `slotContents[].preferredComponents[].booleanDefs` — set all values to `true`) |
 
 **Sub-component preview sourcing:** When `SUB_COMP_SET_ID` is non-empty, the preview script creates instances from the **sub-component's own component set** instead of the parent's `COMP_SET_ID`. This ensures sub-component section previews show the sub-component in isolation (e.g., four Label instances at different sizes) rather than four full parent component instances. The `SUB_COMP_OVERRIDES` parameter specifies boolean properties to enable on each sub-component instance after creation, so optional internal children (e.g., character count, status icon) are visible in the preview. Both `subCompSetId` and `booleanOverrides` are pre-resolved by the enhanced extraction script (Step 4b) — no additional `figma_execute` exploration is needed to discover them.
 
@@ -1037,6 +1206,35 @@ const PROPERTY_OVERRIDES = __PROPERTY_OVERRIDES_JSON__;
 const SUB_COMP_OVERRIDES = __SUB_COMP_OVERRIDES_JSON__;
 const FONT_FAMILY = '__FONT_FAMILY__';
 
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
+async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
+  fallbackStyle = fallbackStyle || 'Regular';
+  const allFonts = await figma.listAvailableFontsAsync();
+  const familyFonts = allFonts.filter(f => f.fontName.family === family);
+  const match = familyFonts.find(f => f.fontName.style === preferredStyle);
+  if (match) { await figma.loadFontAsync(match.fontName); return match.fontName; }
+  const fallback = familyFonts.find(f => f.fontName.style === fallbackStyle);
+  if (fallback) { await figma.loadFontAsync(fallback.fontName); return fallback.fontName; }
+  if (familyFonts.length > 0) { await figma.loadFontAsync(familyFonts[0].fontName); return familyFonts[0].fontName; }
+  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  return { family: 'Inter', style: 'Regular' };
+}
+
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const section = frame.findOne(n => n.name === SECTION_NAME);
 if (!section) return { error: 'Section not found: ' + SECTION_NAME };
@@ -1085,6 +1283,7 @@ for (let i = 0; i < COLUMN_VALUES.length; i++) {
   instances.push({ colValue, targetVariant });
 }
 
+const LABEL_FONT = await loadFontWithFallback(FONT_FAMILY, 'Medium');
 const wrappers = [];
 for (const entry of instances) {
   const wrapper = figma.createFrame();
@@ -1106,15 +1305,17 @@ for (const entry of instances) {
     wrapper.appendChild(placeholder);
   } else {
     const inst = entry.targetVariant.createInstance();
+    await loadAllFonts(inst);
     if (useSubComp && Object.keys(SUB_COMP_OVERRIDES).length > 0) {
       inst.setProperties(SUB_COMP_OVERRIDES);
+      await loadAllFonts(inst);
     }
     wrapper.appendChild(inst);
     entry._inst = inst;
   }
 
   const label = figma.createText();
-  label.fontName = { family: FONT_FAMILY, style: 'Medium' };
+  label.fontName = LABEL_FONT;
   label.characters = entry.colValue;
   label.fontSize = 14;
   label.fills = [{ type: 'SOLID', color: { r: 0.29, g: 0.29, b: 0.29 } }];
@@ -1142,6 +1343,14 @@ return { success: true, section: SECTION_NAME };
    - **Sub-component preview correctness**: Sub-component section previews show instances from the sub-component's own component set (not the parent). Verify that the preview shows the sub-component in isolation (e.g., four Label instances at different sizes, not four full Text Field instances). If `SUB_COMP_OVERRIDES` was specified, verify that optional internal children (e.g., character count, icons) are visible on each preview instance.
    - **Behavior variant preview simplicity**: When a behavior/configuration axis exists (e.g., Static vs Interactive), the preview shows only the default configuration — one row of instances at each size. Do NOT duplicate instances for each configuration.
 3. If issues are found, fix via `figma_execute` and re-capture (up to 3 iterations)
+
+### Step 13: Completion Link
+
+Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (extracted from the user's input URL) and the `frameId` (returned by Step 9), replacing `:` with `-` in the node ID:
+
+```
+Structure spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameId}
+```
 
 ## Notes
 

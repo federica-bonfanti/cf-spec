@@ -321,10 +321,27 @@ if (Object.keys(boolProps).length > 0) {
     baselineKeys.add(e.element + '|' + e.property + '|' + (e.token || e.hex));
   }
 
+  async function loadAllFonts(rootNode) {
+    const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+    const fontSet = new Set();
+    const fontsToLoad = [];
+    for (const tn of textNodes) {
+      try {
+        const fn = tn.fontName;
+        if (fn && fn !== figma.mixed && fn.family) {
+          const key = fn.family + '|' + fn.style;
+          if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+        }
+      } catch {}
+    }
+    await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+  }
+
   const instance = defaultVariant.createInstance();
   instance.x = defaultVariant.x + defaultVariant.width + 100;
   instance.y = defaultVariant.y;
   instance.setProperties(boolProps);
+  await loadAllFonts(instance);
 
   function enableNestedBooleans(node) {
     if (node.type === 'INSTANCE') {
@@ -353,6 +370,7 @@ if (Object.keys(boolProps).length > 0) {
 
   enableNestedBooleans(instance);
   directUnhide(instance);
+  await loadAllFonts(instance);
 
   const enrichedEntries = await walkTree(instance, null);
   const delta = [];
@@ -500,21 +518,29 @@ Check your output against each rule. Fix any violations.
 
 ### Step 9: Import and Detach Template
 
-Run via `figma_execute` (replace `__COLOR_TEMPLATE_KEY__` and `__COMPONENT_NAME__`):
+Run via `figma_execute` (replace `__COLOR_TEMPLATE_KEY__`, `__COMPONENT_NAME__`, and `__COMPONENT_NODE_ID__` with the node ID extracted from the component URL):
 
 ```javascript
 const TEMPLATE_KEY = '__COLOR_TEMPLATE_KEY__';
+const COMP_NODE_ID = '__COMPONENT_NODE_ID__';
+
+const compNode = await figma.getNodeByIdAsync(COMP_NODE_ID);
+let _p = compNode;
+while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
+if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
 
 const templateComponent = await figma.importComponentByKeyAsync(TEMPLATE_KEY);
 const instance = templateComponent.createInstance();
-const { x, y } = figma.viewport.center;
-instance.x = x - instance.width / 2;
-instance.y = y - instance.height / 2;
 const frame = instance.detachInstance();
+
+const GAP = 200;
+frame.x = compNode.x + compNode.width + GAP;
+frame.y = compNode.y;
+
 frame.name = '__COMPONENT_NAME__ Color';
 figma.currentPage.selection = [frame];
 figma.viewport.scrollAndZoomIntoView([frame]);
-return { frameId: frame.id };
+return { frameId: frame.id, pageId: _p.id, pageName: _p.name };
 ```
 
 Save the returned `frameId` — you need it for all subsequent steps.
@@ -584,6 +610,35 @@ const TABLES = __TABLES_JSON__;
 const FONT_FAMILY = '__FONT_FAMILY__';
 const BOOLEAN_UNHIDES = __BOOLEAN_UNHIDES_JSON__;
 
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
+async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
+  fallbackStyle = fallbackStyle || 'Regular';
+  const allFonts = await figma.listAvailableFontsAsync();
+  const familyFonts = allFonts.filter(f => f.fontName.family === family);
+  const match = familyFonts.find(f => f.fontName.style === preferredStyle);
+  if (match) { await figma.loadFontAsync(match.fontName); return match.fontName; }
+  const fallback = familyFonts.find(f => f.fontName.style === fallbackStyle);
+  if (fallback) { await figma.loadFontAsync(fallback.fontName); return fallback.fontName; }
+  if (familyFonts.length > 0) { await figma.loadFontAsync(familyFonts[0].fontName); return familyFonts[0].fontName; }
+  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  return { family: 'Inter', style: 'Regular' };
+}
+
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const variantTemplate = frame.findOne(n => n.name === '#variant-template');
 
@@ -639,7 +694,7 @@ if (previewContainer && COMPONENT_SET_ID) {
         ? (componentSet.defaultVariant || componentSet.children[0])
         : componentSet;
     }
-    await figma.loadFontAsync({ family: FONT_FAMILY, style: 'Medium' });
+    const LABEL_FONT = await loadFontWithFallback(FONT_FAMILY, 'Medium');
     for (const containerName of ['Light theme preview placeholder']) {
       const container = previewContainer.findOne(n => n.name === containerName);
       if (container) {
@@ -658,10 +713,12 @@ if (previewContainer && COMPONENT_SET_ID) {
         container.appendChild(wrapper);
 
         const instance = targetVariant.createInstance();
+        await loadAllFonts(instance);
         if (BOOLEAN_UNHIDES.length > 0) {
           const boolProps = {};
           for (const bu of BOOLEAN_UNHIDES) boolProps[bu.booleanRawKey] = true;
           instance.setProperties(boolProps);
+          await loadAllFonts(instance);
         }
         wrapper.appendChild(instance);
 
@@ -693,9 +750,10 @@ if (previewContainer && COMPONENT_SET_ID) {
           }
         }
         enableNestedBooleans(instance);
+        await loadAllFonts(instance);
 
         const label = figma.createText();
-        label.fontName = { family: FONT_FAMILY, style: 'Medium' };
+        label.fontName = LABEL_FONT;
         label.characters = VARIANT_NAME;
         label.fontSize = 14;
         label.fills = [{ type: 'SOLID', color: { r: 0.29, g: 0.29, b: 0.29 } }];
@@ -801,6 +859,35 @@ const MODE_ID = '__MODE_ID__';
 const FONT_FAMILY = '__FONT_FAMILY__';
 const BOOLEAN_UNHIDES = __BOOLEAN_UNHIDES_JSON__;
 
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
+async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
+  fallbackStyle = fallbackStyle || 'Regular';
+  const allFonts = await figma.listAvailableFontsAsync();
+  const familyFonts = allFonts.filter(f => f.fontName.family === family);
+  const match = familyFonts.find(f => f.fontName.style === preferredStyle);
+  if (match) { await figma.loadFontAsync(match.fontName); return match.fontName; }
+  const fallback = familyFonts.find(f => f.fontName.style === fallbackStyle);
+  if (fallback) { await figma.loadFontAsync(fallback.fontName); return fallback.fontName; }
+  if (familyFonts.length > 0) { await figma.loadFontAsync(familyFonts[0].fontName); return familyFonts[0].fontName; }
+  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  return { family: 'Inter', style: 'Regular' };
+}
+
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const variantTemplate = frame.findOne(n => n.name === '#variant-template');
 
@@ -847,7 +934,7 @@ if (previewContainer && COMPONENT_SET_ID) {
   const componentSet = await figma.getNodeByIdAsync(COMPONENT_SET_ID);
   if (componentSet) {
     const isCompSet = componentSet.type === 'COMPONENT_SET';
-    await figma.loadFontAsync({ family: FONT_FAMILY, style: 'Medium' });
+    const LABEL_FONT = await loadFontWithFallback(FONT_FAMILY, 'Medium');
 
     for (const containerName of ['Light theme preview placeholder']) {
       const container = previewContainer.findOne(n => n.name === containerName);
@@ -892,10 +979,12 @@ if (previewContainer && COMPONENT_SET_ID) {
         }
 
         const inst = targetVariant.createInstance();
+        await loadAllFonts(inst);
         if (BOOLEAN_UNHIDES.length > 0) {
           const boolProps = {};
           for (const bu of BOOLEAN_UNHIDES) boolProps[bu.booleanRawKey] = true;
           inst.setProperties(boolProps);
+          await loadAllFonts(inst);
         }
         wrapper.appendChild(inst);
         if (collection) clearModesRecursive(inst, collection);
@@ -928,9 +1017,10 @@ if (previewContainer && COMPONENT_SET_ID) {
           }
         }
         enableNestedBooleans(inst);
+        await loadAllFonts(inst);
 
         const label = figma.createText();
-        label.fontName = { family: FONT_FAMILY, style: 'Medium' };
+        label.fontName = LABEL_FONT;
         label.characters = STATE_COLUMNS[s];
         label.fontSize = 14;
         label.fills = [{ type: 'SOLID', color: { r: 0.29, g: 0.29, b: 0.29 } }];
@@ -1074,6 +1164,14 @@ return { success: true };
    - For mode-controlled components, preview instances display the correct color mode
    - General notes are visible or hidden as expected
 3. If issues are found, fix via `figma_execute` and re-capture (up to 3 iterations)
+
+### Step 13: Completion Link
+
+Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (extracted from the user's input URL) and the `frameId` (returned by Step 9), replacing `:` with `-` in the node ID:
+
+```
+Color spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameId}
+```
 
 ## Notes
 

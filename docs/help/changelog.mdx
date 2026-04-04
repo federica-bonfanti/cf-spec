@@ -3,6 +3,68 @@ title: "Changelog"
 description: "Product updates and release history"
 ---
 
+<Update label="V1.7.0 — April 2026" description="Figma slot detection, nearest-edge marker placement, component-relative spec placement, and improved rendering">
+  ## uSpec V1.7.0
+
+  All seven skills now detect and handle native Figma SLOT nodes — preferred instances, boolean visibility bindings, and slot content population. Marker placement uses a new nearest-edge algorithm with collision avoidance, specs are placed next to the source component, and rendering is more resilient with dynamic font loading and font-family fallbacks.
+
+  ### Figma SLOT node support
+
+  - **Anatomy** extraction detects SLOT-type properties, resolves `preferredValues` to local component nodes, reads `componentPropertyReferences.visible` for boolean bindings, and surfaces `slotDefaultChildren` for default content. Step 4 enriches slot notes with preferred component names, marks hidden/empty slots for artwork population, and sets section eligibility for sub-component anatomy sections.
+  - **API** extraction collects `slotProps` with preferred instances and `defaultChildren` including contextual overrides. Sub-component table defaults now reflect values the designer set *in the slot context*, not the standalone component's global defaults. Descriptions reference the source component.
+  - **Property** extraction detects boolean-to-slot linkage — when a boolean controls a SLOT's visibility, the description reads "Controls slot: {name} (accepts: {preferred})" instead of the generic "Controls layer".
+  - **Structure** resolves SLOT properties with `preferredValues` and generates dedicated `slotContent` sections per preferred component, measuring contextual dimensions when each preferred component is placed inside the slot across all parent sizes.
+  - **Voice** deep-recurses into SLOT nodes during extraction so interactive elements inside slots appear as separate focus stop entries for merge analysis. Reads `slotVisibility` for conditional focus stop detection across states.
+
+  ### Nearest-edge marker placement with collision avoidance
+
+  - Replaces the previous clockwise / left-stagger / alternating strategy system with a unified **nearest-edge** algorithm across anatomy, per-child, and voice skills
+  - For each element, all four sides are scored by distance to the component boundary — the marker is placed on the shortest side
+  - Before placing, overlap with already-placed markers is checked (8 px minimum gap); on collision, perpendicular offsets are applied, falling back to the next-best side if bounds are exceeded
+  - **Inline markers** for nested elements — elements visually contained inside another annotated element get a short stub line (16 px) on their nearest edge instead of a perimeter marker
+
+  ### Component-relative spec placement
+
+  - Specs are now placed on the **same page as the source component**, positioned to its right with a 200 px gap — no more viewport-center placement
+  - The script resolves the component node, walks up to its PAGE ancestor, activates the page, and positions the frame at `compNode.x + compNode.width + 200`
+  - Cross-file destination URLs retain the existing viewport-center behavior
+
+  ### Completion link
+
+  - Every skill now prints a clickable Figma deep-link URL to the rendered spec frame at the end of the run
+  - URL format: `https://www.figma.com/design/{fileKey}/?node-id={frameId}`
+
+  ### Improved example rendering
+
+  - **Dynamic font loading** (`loadAllFonts`) runs after every mutation that may reveal new text nodes — `createInstance`, `setProperties`, `appendChild` into slots, and `directUnhide` — preventing "unloaded font" errors on components using non-template fonts
+  - **Font-family fallback** (`loadFontWithFallback`) discovers exact font style strings via `listAvailableFontsAsync` instead of hardcoding style names, with graceful fallback through preferred → fallback → first-available → Inter
+  - Template font loading moved from hardcoded family to discovery from existing marker and section text nodes
+  - API configuration example preview now finds SLOT nodes via `findOne(n => n.type === 'SLOT')` instead of assuming `children[0]`
+
+  ### Variant selection evaluation (Anatomy)
+
+  - New Step 4 sub-step 0 evaluates whether the default variant is the best representative — when it yields only 1–2 elements and variant axis option names suggest a structurally richer alternative, the extraction re-runs with `PREFERRED_VARIANT_PROPS`
+  - Does not re-extract for purely stylistic differences (color, size, theme)
+
+  ### Brief description header
+
+  - Anatomy and property specs now compose a 1-sentence `briefDescription` (max ~15 words) describing what the component IS and does, placed in the `#brief-component-description` header field
+  - Replaces the previous generic "Anatomy breakdown of..." and "Configurable properties of..." text
+
+  ### Root container detection (Anatomy)
+
+  - New `childContainerIsVariant` flag indicates when the extraction traversed past the root container — a synthetic container element is always inserted when traversal occurred
+  - When the root container was not traversed, the agent evaluates architectural significance (composable slots, conditional visibility, mixed layout) to decide whether annotation is warranted
+  - `hasStrokes` on the root variant no longer triggers a separate synthetic element — strokes are described in the container note instead
+
+  ### Voice rendering improvements
+
+  - Removed `artworkLabels` and the detach-and-replace-text workflow — artwork instances stay live throughout rendering
+  - `findStopNode` now uses ancestor-aware visibility matching (`isEffectivelyVisible`) for the Focus Order entry, correctly triggering the richest-variant fallback when boolean-enable alone cannot surface all focus stops
+  - Preview wrapper width reads from `previewPlaceholder.width` to match the template layout instead of computing independently
+  - Conditional focus stops and disabled/non-focusable states documented in merge analysis guidance
+</Update>
+
 <Update label="V1.6.2 — April 2026" description="FRAME-wrapped text detection, frame icon indicators, and effect style consolidation">
   ## uSpec V1.6.2
 

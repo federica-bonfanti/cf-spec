@@ -120,6 +120,34 @@ for (const tn of textNodes) {
 await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 ```
 
+**Loading fonts from component instances** — component instances may use fonts not present in the template's static text nodes (e.g., a component using "Uber Move" when the template uses "Inter"). After creating a component instance via `createInstance()`, and after any operation that may reveal new text nodes (`setProperties`, `appendChild` for slot content, `directUnhide`), call `loadAllFonts` on the instance before performing further mutations:
+
+```javascript
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+```
+
+Call `loadAllFonts(instance)` at these critical points:
+1. After `createInstance()` — the instance may contain text nodes with non-template fonts
+2. After `setProperties()` — toggling booleans or swapping variants may reveal hidden text nodes with different fonts
+3. After `appendChild()` into a SLOT — the inserted child may bring new fonts
+4. After `directUnhide()` — making hidden nodes visible may expose text with unloaded fonts
+
+This prevents `"unloaded font"` errors when Figma tries to reflow auto-layout after a mutation.
+
 **Loading a font by family name** — font style names vary per file (`"SemiBold"` vs `"Semi Bold"`). Use `listAvailableFontsAsync` to discover exact style strings:
 
 ```javascript
@@ -138,6 +166,63 @@ async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
 ```
 
 See [Figma MCP server guide — text-style-patterns](https://github.com/figma/mcp-server-guide/blob/main/skills/figma-use/references/text-style-patterns.md) for the upstream reference.
+
+### SLOT Node Handling
+
+Figma introduced **Slots** as a native component property type (currently in open beta). A `SlotNode` (`type: 'SLOT'`) is a child frame of a component that allows freeform content editing in instances — designers can add, remove, and rearrange children without detaching the instance. This mirrors how components work in code (e.g., React `children` or named slots in Vue/Svelte).
+
+**SLOT is a fifth component property type** alongside BOOLEAN, TEXT, INSTANCE_SWAP, and VARIANT:
+
+```javascript
+type ComponentPropertyType = 'BOOLEAN' | 'TEXT' | 'INSTANCE_SWAP' | 'VARIANT' | 'SLOT'
+```
+
+**Creating slots** — `ComponentNode` exposes `createSlot()`:
+
+```javascript
+const slot = comp.createSlot(); // returns SlotNode, also creates a SLOT property in componentPropertyDefinitions
+```
+
+Slots can also be created via `addComponentProperty('name', 'SLOT', ...)`. The `editComponentProperty` method supports `preferredValues` (array of `InstanceSwapPreferredValue` — curated components suggested when adding content to the slot) and `description` (string — only SLOT properties support descriptions). `deleteComponentProperty` also supports SLOT type.
+
+**Traversal** — skills that walk component trees to find meaningful children must handle SLOT nodes. The `resolveChildContainer` pattern used in anatomy treats a single-child SLOT the same way it treats a single-child auto-layout FRAME — as a transparent wrapper:
+
+```javascript
+// After walking through single-child auto-layout FRAMEs:
+if (cc.children.length === 1 && cc.children[0].type === 'SLOT') {
+  cc = cc.children[0];
+}
+```
+
+When iterating `childContainer.children`, SLOT children appear as regular `SceneNode` entries — INSTANCE, TEXT, FRAME, etc. The SLOT itself only appears when it is a direct child of the container being iterated.
+
+**Populating slot content** — use `appendChild` to insert content into a SLOT node on a component instance:
+
+```javascript
+const slotNode = compInstance.findOne(n => n.type === 'SLOT');
+const contentInstance = contentComponent.createInstance();
+slotNode.appendChild(contentInstance);
+await loadAllFonts(compInstance); // inserted child may bring new fonts — see Font Loading above
+```
+
+Inserting into a SLOT triggers auto-layout reflow on the parent. Re-read dimensions and bounding boxes after population if marker placement or sizing depends on them.
+
+**Resetting slots** — `slotNode.resetSlot()` reverts slot content to the main component's default. Useful for cleanup or undo scenarios.
+
+**Reading slot properties** — `componentPropertyDefinitions` entries with `type: 'SLOT'` expose:
+- `preferredValues` — array of `{ type: 'COMPONENT', key: string }` pointing to recommended components for the slot
+- `description` — string describing the slot's purpose (only SLOT properties support this field)
+
+**Boolean bindings** — a slot's `componentPropertyReferences.visible` may point to a boolean property that controls slot visibility. Read it to detect hidden/conditional slots:
+
+```javascript
+const cpRefs = slotNode.componentPropertyReferences || {};
+if (cpRefs.visible) {
+  // cpRefs.visible is the raw key of the controlling boolean property
+}
+```
+
+**Current skill support:** `create-anatomy` handles SLOT nodes with dedicated extraction, classification, preferred-instance resolution, and rendering logic. `create-structure` detects SLOT properties with `preferredValues` and generates dedicated `slotContent` sections per preferred component — measuring contextual dimensions (padding, constraints, alignment) when each preferred component is placed inside the slot across all parent sizes. `create-api` extracts `slotProps` with preferred instances and default children for Pattern A sub-component tables. `create-property` extracts `slotProps` for informational completeness and detects boolean-to-slot linkage — when a boolean controls a SLOT's visibility, the property exhibit description reads "Controls slot" with preferred content names instead of the generic "Controls layer". SLOT properties do not produce their own property chapters (slot content is freeform). `create-voice` deep-recurses into SLOT nodes during extraction to discover interactive children as individual focus stops — a SLOT containing 2 buttons yields 2 separate entries for merge analysis. It also reads `slotVisibility` (boolean bindings on SLOT nodes) so the AI can account for conditional focus stops that appear/disappear between states. Other skills interact with slot-based components at the design-pattern level (composable children, container detection) without SLOT-specific node handling.
 
 ### Console MCP Tools
 
@@ -233,10 +318,11 @@ Template component keys are stored in `uspecs.config.json` and configured via th
 All skills render directly in Figma via Plugin API JavaScript (`figma_execute` on Console MCP, `use_figma` on native MCP), following a shared pattern:
 
 1. **Extract** — Gather component data via MCP tools and AI reasoning (motion skill reads pre-computed data from AE export JSON instead)
-2. **Import template** — `figma.importComponentByKeyAsync` with the skill's template key (from `uspecs.config.json`), create instance, detach
+2. **Import template** — `figma.importComponentByKeyAsync` with the skill's template key (from `uspecs.config.json`), create instance, detach, and place on the **component's page** to the right of the component (see Spec Placement below)
 3. **Fill header** — Set component name, description, and header text
 4. **Build content** — Clone template sections, fill text fields, build tables, create component instances where needed
 5. **Validate** — Screenshot to verify output (`figma_take_screenshot` or `get_screenshot`)
+6. **Completion link** — Print a clickable Figma deep-link URL to the rendered spec frame in chat: `https://www.figma.com/design/{fileKey}/?node-id={frameId}` (with `:` replaced by `-` in the node ID)
 
 **Template keys:** All template keys are stored in `uspecs.config.json` under the `templateKeys` object and configured via the `firstrun` skill. Each skill has its own template key.
 
@@ -244,13 +330,19 @@ All skills render directly in Figma via Plugin API JavaScript (`figma_execute` o
 
 **Variant selection (Anatomy):** Step 3 uses the default variant for extraction. If the default variant produces 0 elements after wrapper traversal (e.g., an unchecked checkbox whose default state has an empty structure frame), the script falls back to the richest variant (most descendant children). The selected variant's ID is returned as `selectedVariantId` and reused by Step 8 for rendering, ensuring the artwork matches the extraction data.
 
-**Marker positioning (Anatomy):** After placing the component instance in the artwork, the skill re-reads actual child positions from the instance using `absoluteTransform` rather than relying on extraction-time positions. Marker placement uses three strategies based on element center clustering: **clockwise** (concentric/overlapping elements — left, top, right, bottom rotation), **left stagger** (vertically stacked elements sharing an x-center), or **alternating** (mixed layouts — first left, then alternating top/bottom).
+**Marker positioning (Anatomy & Voice):** After placing the component instance in the artwork, the skill re-reads actual child positions from the instance using `absoluteTransform` rather than relying on extraction-time positions. Marker placement uses the **nearest-edge + collision avoidance** algorithm: for each element, score all four sides by distance from the element's edge to the component boundary, pick the shortest, then check for overlap with already-placed markers (8px minimum gap). If overlap exists, apply perpendicular offset; if offset exceeds artwork bounds, try the next-best side. In Anatomy, when multiple sides tie at the same distance, a tiebreaker prefers top/bottom over left/right (producing cleaner vertical connector lines for wide components). Connectors are always straight lines from the marker to the element's nearest edge; when a perpendicular collision-avoidance offset is applied, the anchor point on the element edge shifts by the same offset so the line stays axis-aligned. Anatomy also supports **inline markers** for elements nested inside other annotated elements — these sit on the nearest edge with a short stub line (16px) and are excluded from the perimeter collision pool.
+
+**Slot preferred instances (Anatomy):** The Step 3 extraction script reads `componentPropertyDefinitions` for SLOT-type properties with `preferredValues`, resolves component keys via local page traversal, and reads `componentPropertyReferences.visible` for boolean bindings. Step 4 enriches slot notes with preferred component names, marks hidden/empty slots for artwork population, and sets section eligibility. Step 8 inserts preferred component instances directly into the SLOT node via `appendChild`; if slot insertion fails, it falls back to a ghost instance overlay. Step 8b creates sub-component anatomy sections for eligible preferred instances, deduplicating against existing default slot children.
 
 **Property extraction (Property):** `create-property` uses a two-tier extraction model. **Tier 1 (deterministic scripts):** Steps 3, 3a, 3c, and 3d are `figma_execute` scripts that extract properties, resolve variant-gated booleans, link controlling booleans to child components by node ID, and normalize the data (coupled axes, unified slot chapters, sibling boolean collapsing). **Tier 2 (AI reasoning):** Step 3b (variable mode search) requires AI judgment for collection matching, and Step 3e is a validation layer that cross-checks the deterministic output for semantic mismatches, structural anomalies, and combination count sanity before rendering.
 
 **Structure extraction (Structure):** `create-structure` uses the same two-tier extraction model. **Tier 1 (deterministic scripts):** Steps 4b (enhanced extraction: dimensions, tokens, sub-components, collapsed dimensions) and 4d (cross-variant dimensional comparison) are `figma_execute` scripts that measure every variant, resolve token bindings, walk sub-component trees, and build the raw comparison data. **Tier 2 (AI reasoning):** Step 6 is an AI interpretation layer that builds the section plan, writes design-intent notes, detects anomalies, and judges completeness before the deterministic rendering step fills the template.
 
 **Color extraction (Color):** `create-color` uses the same two-tier extraction model. **Tier 1 (deterministic script):** Step 4b is a single consolidated `figma_execute` script that walks the component tree, resolves color variable bindings, classifies variant axes by token fingerprint, detects boolean-gated elements (with nested boolean enablement), tags sub-component instances with their parent component set name, and discovers mode-controlled collections — all in one call. **Tier 2 (AI reasoning):** Step 4c interprets the extraction output — chooses the rendering strategy (Strategy A vs B via the two-gate model), builds the variant plan, resolves mode-specific token aliases, and maps elements to tokens.
+
+**Spec placement:** The import template step places the spec frame on the **same page as the source component**, positioned to its right with a 200 px gap. The script resolves the component node via `getNodeByIdAsync`, walks up to its PAGE ancestor, calls `setCurrentPageAsync` to activate that page, then positions the frame at `compNode.x + compNode.width + 200, compNode.y`. This works identically for both MCP providers — the page-loading block is harmless on Console MCP where the page is already active. For skills that accept a cross-file destination URL (anatomy, property, structure, motion), the cross-file branch keeps the existing viewport-center placement; the component-relative placement only applies when the spec stays in the same file as the component.
+
+**Completion link:** After the final validation step, the agent constructs a Figma deep-link URL from the `fileKey` (extracted from the user's input URL) and the `frameId` (returned by the import step), replacing `:` with `-` in the node ID. The agent prints this URL in chat so the user can click directly to the rendered spec.
 
 **Clone visibility:** All cloned sections explicitly set `visible = true` after cloning, since template sources are hidden.
 
@@ -405,7 +497,7 @@ Only `firstrun` is committed in `.claude/skills/` and `.agents/skills/` — all 
 
 | File | Content |
 |------|---------|
-| `anatomy/agent-anatomy-instruction.md` | Anatomy annotation: extraction validation checklist, note-writing guidelines, property-aware unhide decisions, concentric layout detection |
+| `anatomy/agent-anatomy-instruction.md` | Anatomy annotation: extraction validation checklist, note-writing guidelines, property-aware unhide decisions, nearest-edge marker placement, inline marker detection, slot preferred instance enrichment |
 | `screen-reader/agent-screenreader-instruction.md` | Screen reader spec: data schema, platform reference (VoiceOver/TalkBack/ARIA), merge analysis guidance |
 | `screen-reader/voiceover.md` | iOS accessibility properties reference |
 | `screen-reader/talkback.md` | Android semantics and roles reference |

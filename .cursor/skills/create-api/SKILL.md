@@ -121,6 +121,7 @@ const propDefs = node.componentPropertyDefinitions;
 const variantAxes = [];
 const booleanProps = [];
 const instanceSwapProps = [];
+const slotProps = [];
 
 for (const [rawKey, def] of Object.entries(propDefs)) {
   const cleanKey = rawKey.split('#')[0];
@@ -166,11 +167,102 @@ for (const [rawKey, def] of Object.entries(propDefs)) {
       defaultValue: swapTargetName || def.defaultValue,
       rawKey
     });
+  } else if (def.type === 'SLOT') {
+    const preferred = [];
+    if (def.preferredValues && def.preferredValues.length > 0) {
+      for (const pv of def.preferredValues) {
+        if (pv.type === 'COMPONENT') {
+          let compName = null;
+          try {
+            const comp = await figma.getNodeByIdAsync(pv.key);
+            if (comp) compName = comp.name;
+          } catch {}
+          preferred.push({ componentKey: pv.key, componentName: compName || pv.key });
+        }
+      }
+    }
+    slotProps.push({
+      name: cleanKey,
+      description: def.description || '',
+      preferredInstances: preferred,
+      rawKey,
+      defaultChildren: []
+    });
   }
 }
 
 const defaultVariant = isComponentSet ? (node.defaultVariant || node.children[0]) : node;
 const defaultProps = { ...(defaultVariant.variantProperties || {}) };
+
+// Read default children of SLOT nodes for contextual overrides
+if (slotProps.length > 0) {
+  const allSlotNodes = defaultVariant.findAll ? defaultVariant.findAll(n => n.type === 'SLOT') : [];
+  for (const slotNode of allSlotNodes) {
+    const cpRefs = slotNode.componentPropertyReferences || {};
+    const matchingSlot = slotProps.find(sp => {
+      const refKey = Object.values(cpRefs)[0];
+      if (refKey && refKey.split('#')[0] === sp.name) return true;
+      return sp.name === slotNode.name;
+    });
+    if (matchingSlot && slotNode.children) {
+      for (const child of slotNode.children) {
+        if (child.type === 'INSTANCE') {
+          const mainComp = await child.getMainComponentAsync();
+          const overrides = {};
+          if (child.componentProperties) {
+            for (const [k, v] of Object.entries(child.componentProperties)) {
+              overrides[k.split('#')[0]] = v.value;
+            }
+          }
+          matchingSlot.defaultChildren.push({
+            componentName: mainComp ? mainComp.name : child.name,
+            componentKey: mainComp ? mainComp.key : '',
+            contextualOverrides: overrides
+          });
+        }
+      }
+    }
+  }
+}
+
+// Read composable children for legacy (non-SLOT) components
+const composableChildren = [];
+if (slotProps.length === 0 && defaultVariant.children) {
+  for (const child of defaultVariant.children) {
+    if (child.type === 'INSTANCE') {
+      const mainComp = await child.getMainComponentAsync();
+      const overrides = {};
+      if (child.componentProperties) {
+        for (const [k, v] of Object.entries(child.componentProperties)) {
+          overrides[k.split('#')[0]] = v.value;
+        }
+      }
+      composableChildren.push({
+        componentName: mainComp ? mainComp.name : child.name,
+        componentKey: mainComp ? mainComp.key : '',
+        contextualOverrides: overrides
+      });
+    } else if (child.children) {
+      for (const grandchild of child.children) {
+        if (grandchild.type === 'INSTANCE') {
+          const mainComp = await grandchild.getMainComponentAsync();
+          const overrides = {};
+          if (grandchild.componentProperties) {
+            for (const [k, v] of Object.entries(grandchild.componentProperties)) {
+              overrides[k.split('#')[0]] = v.value;
+            }
+          }
+          composableChildren.push({
+            componentName: mainComp ? mainComp.name : grandchild.name,
+            componentKey: mainComp ? mainComp.key : '',
+            contextualOverrides: overrides,
+            parentLayer: child.name
+          });
+        }
+      }
+    }
+  }
+}
 
 const variantAxesObj = {};
 if (isComponentSet && node.variantGroupProperties) {
@@ -186,6 +278,8 @@ return {
   variantAxes,
   booleanProps,
   instanceSwapProps,
+  slotProps,
+  composableChildren,
   variantAxesObj,
   defaultProps,
   defaultVariantName: defaultVariant.name
@@ -197,10 +291,12 @@ Save the returned JSON. This provides:
 - `variantAxes` — each axis with `name`, `options`, and `defaultValue` for populating the main property table
 - `booleanProps` — each boolean with `name`, `defaultValue`, `associatedLayer`, and `rawKey` (the exact Figma key including `#nodeId` suffix for `setProperties()`)
 - `instanceSwapProps` — each instance swap with `name`, `defaultValue`, and `rawKey`
+- `slotProps` — each native SLOT property with `name`, `description`, `preferredInstances` (approved components for the slot), and `defaultChildren` (instances found in the slot with their `contextualOverrides` — property values set by the designer that may differ from the component's standalone defaults)
+- `composableChildren` — for legacy components without native SLOT nodes: child INSTANCE nodes found in the default variant, each with `componentName`, `componentKey`, `contextualOverrides`, and optional `parentLayer` (the containing frame name). Empty when `slotProps` is populated.
 - `defaultProps` — default variant property values for variant matching in configuration examples
 - `defaultVariantName` — for fallback identification
 
-Use this structured data in Step 5 to identify properties deterministically rather than relying solely on MCP tool interpretation.
+Use this structured data in Step 5 to identify properties deterministically rather than relying solely on MCP tool interpretation. When building sub-component tables (Pattern A or B), use `slotProps.defaultChildren.contextualOverrides` or `composableChildren.contextualOverrides` to populate the `default` column with context-specific values rather than the component's global defaults.
 
 ### Step 5: Identify Properties
 
@@ -229,21 +325,29 @@ Check your output against each rule. Fix any violations.
 
 ### Step 8: Import and Detach Template
 
-Run via `figma_execute` (replace `__API_TEMPLATE_KEY__` and `__COMPONENT_NAME__`):
+Run via `figma_execute` (replace `__API_TEMPLATE_KEY__`, `__COMPONENT_NAME__`, and `__COMPONENT_NODE_ID__` with the node ID extracted from the component URL):
 
 ```javascript
 const TEMPLATE_KEY = '__API_TEMPLATE_KEY__';
+const COMP_NODE_ID = '__COMPONENT_NODE_ID__';
+
+const compNode = await figma.getNodeByIdAsync(COMP_NODE_ID);
+let _p = compNode;
+while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
+if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
 
 const templateComponent = await figma.importComponentByKeyAsync(TEMPLATE_KEY);
 const instance = templateComponent.createInstance();
-const { x, y } = figma.viewport.center;
-instance.x = x - instance.width / 2;
-instance.y = y - instance.height / 2;
 const frame = instance.detachInstance();
+
+const GAP = 200;
+frame.x = compNode.x + compNode.width + GAP;
+frame.y = compNode.y;
+
 frame.name = '__COMPONENT_NAME__ API';
 figma.currentPage.selection = [frame];
 figma.viewport.scrollAndZoomIntoView([frame]);
-return { frameId: frame.id };
+return { frameId: frame.id, pageId: _p.id, pageName: _p.name };
 ```
 
 Save the returned `frameId` — you need it for all subsequent steps.
@@ -501,6 +605,22 @@ const VARIANT_PROPS = __VARIANT_PROPERTIES_JSON__;
 const CHILD_OVERRIDES = __CHILD_OVERRIDES_JSON__;
 const EXAMPLE_PROPERTIES = __EXAMPLE_PROPERTIES_JSON__;
 
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const exampleTemplate = frame.findOne(n => n.name === '#config-example-chapter-template');
 
@@ -543,13 +663,16 @@ if (preview) {
     ? (compNode.defaultVariant || compNode.children[0])
     : compNode;
   const instance = defaultVariant.createInstance();
+  await loadAllFonts(instance);
   if (Object.keys(VARIANT_PROPS).length > 0) {
     instance.setProperties(VARIANT_PROPS);
+    await loadAllFonts(instance);
   }
 
   // Apply per-child overrides for composable slot children
   if (CHILD_OVERRIDES && CHILD_OVERRIDES.length > 0) {
-    const slot = instance.children[0];
+    let slot = instance.findOne(n => n.type === 'SLOT');
+    if (!slot) slot = instance.children[0];
     if (slot && slot.children) {
       for (let i = 0; i < Math.min(CHILD_OVERRIDES.length, slot.children.length); i++) {
         const child = slot.children[i];
@@ -558,6 +681,7 @@ if (preview) {
         }
       }
     }
+    await loadAllFonts(instance);
   }
 
   preview.appendChild(instance);
@@ -616,6 +740,14 @@ return { success: true };
    - Each configuration example Preview frame contains a live component instance (no text description)
    - General notes are visible or hidden as expected
 3. If issues are found, fix via `figma_execute` and re-capture (up to 3 iterations)
+
+### Step 14: Completion Link
+
+Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (extracted from the user's input URL) and the `frameId` (returned by Step 8), replacing `:` with `-` in the node ID:
+
+```
+API spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameId}
+```
 
 ## Notes
 

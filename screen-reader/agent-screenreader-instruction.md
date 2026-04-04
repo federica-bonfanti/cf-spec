@@ -54,6 +54,8 @@ A part is **NOT** a focus stop if:
 - It's a **live region** — content appears reactively but the user doesn't navigate to it (error messages, status updates, toast notifications)
 - It's **decorative** — dividers, background shapes, non-functional icons
 
+**Conditional focus stops**: Some elements are focus stops only in certain states (e.g., a clear button appears only when text is entered). During merge analysis, flag these as conditional and note which state makes them visible. The rendering script uses visibility-aware focus stop resolution for the Focus Order artwork — elements that are hidden in the default variant and not surfaced by boolean-enable will trigger a richest-variant fallback. Ensure conditional focus stops are documented in states where they actually appear.
+
 **Merge mechanisms by platform:**
 
 | Platform | How Parts Merge | How Parts Break Out |
@@ -342,6 +344,8 @@ For grouped controls (tab bar, radio group, button group), don't document every 
 | Simple component with no compound parts | Omit `focusOrder` entirely; just use 3 platform sections per state |
 | Merged parent with one breakout child | If a container uses `mergeDescendants` but one child is independently interactive, list only the interactive child as a focus stop — the container is not a stop |
 | Ambiguous merge across platforms | If iOS merges parts but Web keeps them as separate focusable elements, document the superset in `focusOrder` and note platform differences in guidelines |
+| SLOT node in component tree | SLOT is a transparent wrapper — treat it like an auto-layout FRAME for merge analysis. Focus stops are the SLOT's children, not the SLOT itself. A SLOT containing 2 interactive buttons means 2 focus stops. If a SLOT has a boolean visibility binding (`componentPropertyReferences.visible`), the children may appear/disappear between states — account for this in per-state focus order |
+| Disabled / non-focusable state | The component is removed from the focus order entirely — focus stop count is 0. Document the state's platform properties (`.notEnabled` trait, `disabled()`, `aria-disabled`) but do not list any focus order entries. Artwork shows the component preview without markers, outlines, or connecting lines. |
 
 ---
 
@@ -389,7 +393,7 @@ Before rendering in Figma, verify your structured data against these checks:
 | ☐ **Straight quotes** | JSON uses ASCII `"` not curly quotes `""` |
 | ☐ **No placeholders** | All values use actual text from the component, not `<label>` — applies to both table data AND artwork preview labels |
 | ☐ **Preview placeholder has component** | Each state's `Preview placeholder` contains a centered component preview (instance, or detached frame after label modification) |
-| ☐ **Markers match focus stops** | Numbered markers correspond 1:1 to the focus order entries — rendered for every state, even single-stop components |
+| ☐ **Markers match focus stops** | Numbered markers correspond 1:1 to the focus order entries — rendered for every state that has at least one focus stop, even single-stop components. States with zero focus stops (e.g., Disabled) show only the component preview without markers. |
 | ☐ **Markers positioned correctly** | Marker #1 is left of component, even numbers above, odd numbers below — with connecting lines to their target elements |
 | ☐ **`elements` populated** | `elements` array has entries from extraction with `isFocusStop` set based on merge analysis (when Figma link provided) |
 

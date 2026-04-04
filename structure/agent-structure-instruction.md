@@ -329,6 +329,70 @@ Do **not** use this for states that simply change existing numeric property valu
 
 ---
 
+## Slot Content Sections
+
+Components with native Figma SLOT nodes can have **preferred instances** — a curated list of components approved for use in each slot (e.g., a ListItem's leading slot accepts Checkbox, Avatar, Icon). When the extraction discovers SLOT properties with `preferredValues`, create a dedicated structure section per preferred component to document its dimensional properties **in the slot context**.
+
+### When to use
+
+Add slot content sections when:
+- The extraction's `slotContents` array has entries with non-empty `preferredComponents`
+- The cross-variant comparison's `slotContentDimensions` has measurement data for those preferred components
+
+Do **not** create slot content sections for slots without `preferredValues` — those are unconstrained and don't have specific dimensional guidance to document.
+
+### How to structure
+
+Each slot content section follows the same table format as a sub-component section:
+- **Section name:** `"{slotName} — {componentName}"` (e.g., "Leading content — Checkbox")
+- **Section description:** `"Dimensional properties when {componentName} is placed in the {slotName} slot."` Add cross-references: "See Checkbox spec for component internals."
+- **Columns:** Match the parent's size axis (e.g., Spec | Large | Medium | Small | Notes)
+- **Preview:** Instances of the preferred component at each parent size, sourced from the preferred component's own component set
+- **Data source:** `slotContentDimensions.{slotName}.{componentName}` — contains `self` (the preferred component's measurements after auto-layout reflow) and `slotContext` (the SLOT node's measurements after content insertion)
+
+### What dimensions to document
+
+The `self` measurements capture the preferred component's contextual dimensions — these may differ from its standalone defaults due to auto-layout constraints from the parent:
+- **Padding overrides** — optical alignment padding applied when the component sits inside the slot
+- **Constrained sizes** — min/max dimensions imposed by the slot or parent auto-layout
+- **Alignment** — vertical/horizontal alignment of the content within the slot
+
+The `slotContext` measurements capture the SLOT node itself:
+- **Slot padding** — inner padding of the slot container
+- **Slot dimensions** — min/max width/height of the slot
+
+### Design-intent notes
+
+Notes for slot content sections should explain the contextual relationship:
+
+| Instead of this | Write this |
+|---|---|
+| "Checkbox size" | "Compact density variant — optically aligned with primary text baseline" |
+| "Padding" | "4px inner padding for optical centering within 40px slot height" |
+| "Width" | "Fixed 24px to match leading icon grid across all slot content types" |
+
+### Example
+
+**Leading content — Checkbox**
+
+- Section name: "Leading content — Checkbox"
+- Description: "Dimensional properties when Checkbox is placed in the leading content slot. See Checkbox spec for component internals."
+- Preview: Checkbox instances at each parent size (Large, Medium, Small)
+- Columns: Spec | Large | Medium | Small | Notes
+
+| Spec | Large | Medium | Small | Notes |
+|---|---|---|---|---|
+| Checkbox | – | – | – | Preferred slot content |
+| ├─ width | 32 | 32 | 24 | Fixed width matches slot grid |
+| ├─ height | 32 | 32 | 24 | 1:1 aspect ratio maintained |
+| └─ verticalAlignment | center | center | center | Centered in slot height |
+
+### Grouping and ordering
+
+Slot content sections are grouped by slot (leading → trailing, matching visual order) and placed after regular sub-component sections but before state-conditional sections. Within a slot group, order preferred components by the order they appear in `preferredValues`.
+
+---
+
 ## Interpretation Quality Guidance
 
 The AI interpretation layer has complete, structured data from the extraction and cross-variant comparison. Instead of writing `figma_execute` queries, focus on high-value reasoning tasks that directly improve spec quality for engineers.
@@ -452,7 +516,7 @@ Container          –      –      –     Tap target
 
 | Rule | Guidance |
 |------|----------|
-| Section order | Composition section first (if applicable), then parent container, then sub-components in visual order (leading → middle → trailing), then state-conditional sections last |
+| Section order | Composition section first (if applicable), then parent container, then sub-components in visual order (leading → middle → trailing), then slot content sections (grouped by slot: leading → trailing, one per preferred component), then state-conditional sections last |
 | Column consistency | All rows in a section must have same number of values matching column count |
 | Hierarchy | Use `isSubProperty: true` for properties that belong to a parent row |
 | Value format | Use plain numbers without units: "48", "16", "full", "center". Use "–" for not applicable. |
@@ -573,6 +637,7 @@ Both the extraction and cross-variant data provide pre-formatted `display` strin
 | Sub-component INSTANCE with its own boolean properties | Does `instance.componentProperties` have BOOLEAN entries? | Enable them all, inspect revealed children, document their dimensions in the sub-component's section |
 | State variant with different stroke/border visibility | Does the border appear/disappear or change weight between states? | Create a state-conditional section showing the border difference (e.g., "Tag — Interactive states") |
 | No size/density/shape axes, only functional axes (e.g., checked, expanded, on/off) | Are dimensions identical across all variants? | Still use variants as columns — shows intentional consistency. Never collapse to a single "Default" column. |
+| SLOT node with `preferredValues` in `slotContents` | Does `slotContentDimensions` have measurement data for preferred components? | Create a `slotContent` section per preferred component, documenting contextual dimensions within the slot |
 | INSTANCE child (icon, badge, illustration) inside a container | Does `parentSetName` identify which component is used? Is it present in all variants? | Add an `iconName` row with `parentSetName`, then `iconSize`. Use `"–"` in columns where the child is absent. |
 
 ---
@@ -713,7 +778,7 @@ Before rendering into Figma, verify:
 | ☐ **Hierarchy markers** | Child rows have `isSubProperty: true`; last child in each group also has `isLastInGroup: true` |
 | ☐ **No units** | Values are plain numbers without px, dp, or pt |
 | ☐ **No placeholders** | No `<value>`, `[TBD]`, or placeholder text — only real measurements |
-| ☐ **Section order** | Composition section first (if applicable), then parent container, sub-components in visual order, state-conditional sections last |
+| ☐ **Section order** | Composition section first (if applicable), then parent container, sub-components in visual order, slot content sections (grouped by slot), state-conditional sections last |
 | ☐ **Notes column** | Every row has a notes value (use "–" if no note needed) |
 | ☐ **Preview per section** | Each section has a distinct preview showing variant instances relevant to that section's axis |
 | ☐ **Sub-component preview sourcing** | Sub-component section previews use `subComponents[].subCompSetId` from extraction, not the parent's component set. Boolean overrides from `subComponents[].booleanOverrides` (all set to `true`) are applied. |
@@ -723,6 +788,7 @@ Before rendering into Figma, verify:
 | ☐ **Composition section** | If component has 2+ sub-components with their own size variants, a composition section comes first |
 | ☐ **Behavior variant previews** | Default configuration only for the preview; border/stroke differences documented as table rows |
 | ☐ **State-conditional sections** | States that introduce new properties or change border/stroke have their own section (detected by `stateComparison` from the cross-variant data) |
+| ☐ **Slot content sections** | Every preferred component in `slotContents` with `slotContentDimensions` data has its own `slotContent` section. Sections are grouped by slot (leading → trailing) and placed after sub-component sections, before state-conditional sections. |
 | ☐ **Cross-section patterns** | `generalNotes` includes system-wide patterns (shared token families, symmetrical slot designs, density scaling strategies) |
 | ☐ **Component references documented** | INSTANCE children have an `iconName` row (using `parentSetName`) before the `iconSize` row. Absent children use `"–"`. |
 

@@ -127,6 +127,7 @@ const propDefs = node.componentPropertyDefinitions;
 const variantAxes = [];
 const booleanProps = [];
 const instanceSwapProps = [];
+const slotProps = [];
 
 for (const [rawKey, def] of Object.entries(propDefs)) {
   const cleanKey = rawKey.split('#')[0];
@@ -138,6 +139,8 @@ for (const [rawKey, def] of Object.entries(propDefs)) {
     });
   } else if (def.type === 'BOOLEAN') {
     let associatedLayer = null;
+    let controlsSlot = false;
+    let slotPreferredNames = [];
     const defaultVariant = isComponentSet ? (node.defaultVariant || node.children[0]) : node;
     const props = defaultVariant.componentProperties;
     if (props) {
@@ -147,7 +150,21 @@ for (const [rawKey, def] of Object.entries(propDefs)) {
           if (nodeId) {
             try {
               const layerNode = await figma.getNodeByIdAsync(defaultVariant.id.split(';')[0] + ';' + nodeId);
-              if (layerNode) associatedLayer = layerNode.name;
+              if (layerNode) {
+                associatedLayer = layerNode.name;
+                if (layerNode.type === 'SLOT') {
+                  controlsSlot = true;
+                  const matchedSlotDef = slotProps.find(s => s.name === layerNode.name) ||
+                    Object.entries(propDefs).find(([rk, d]) => d.type === 'SLOT' && rk.split('#')[0] === layerNode.name);
+                  if (matchedSlotDef) {
+                    const sDef = matchedSlotDef.preferredInstances || (matchedSlotDef[1] && matchedSlotDef[1].preferredValues) || [];
+                    const pvArr = Array.isArray(sDef) ? sDef : [];
+                    for (const pv of pvArr) {
+                      if (pv.componentName) slotPreferredNames.push(pv.componentName);
+                    }
+                  }
+                }
+              }
             } catch {}
           }
         }
@@ -157,12 +174,34 @@ for (const [rawKey, def] of Object.entries(propDefs)) {
       name: cleanKey,
       defaultValue: def.defaultValue,
       associatedLayer,
+      controlsSlot,
+      slotPreferredNames,
       rawKey
     });
   } else if (def.type === 'INSTANCE_SWAP') {
     instanceSwapProps.push({
       name: cleanKey,
       defaultValue: def.defaultValue,
+      rawKey
+    });
+  } else if (def.type === 'SLOT') {
+    const preferred = [];
+    if (def.preferredValues && def.preferredValues.length > 0) {
+      for (const pv of def.preferredValues) {
+        if (pv.type === 'COMPONENT') {
+          let compName = null;
+          try {
+            const comp = await figma.getNodeByIdAsync(pv.key);
+            if (comp) compName = comp.name;
+          } catch {}
+          preferred.push({ componentKey: pv.key, componentName: compName || pv.key });
+        }
+      }
+    }
+    slotProps.push({
+      name: cleanKey,
+      description: def.description || '',
+      preferredInstances: preferred,
       rawKey
     });
   }
@@ -178,6 +217,7 @@ return {
   variantAxes,
   booleanProps,
   instanceSwapProps,
+  slotProps,
   defaultProps,
   defaultVariantName: defaultVariant.name
 };
@@ -728,6 +768,10 @@ For each `unifiedSlotChapter` and `siblingBoolChapter`, verify the number of `pr
 - If a chapter has only 2 combinations (just "None" and one other), consider whether it should remain as a unified chapter or be rendered as a simple boolean toggle instead
 - If combination labels are unclear or redundant, rewrite them for clarity
 
+#### Compose brief description
+
+Write a `briefDescription` string (1 sentence, max ~15 words) for the spec header's `#brief-component-description` field. This describes what the component IS and does — not what the spec type is. Incorporate user-provided context when available. When no context is provided, derive from the extraction data (e.g., "Composable section header with configurable leading, title, and trailing slots"). Do not start with the component name — it already appears in the `#comp-name-anatomy` field above. Avoid generic descriptions like "Configurable properties of..." — instead describe the component's purpose and role. Save this string for Step 6.
+
 After validation, proceed with the corrected data to rendering.
 
 ### Step 4: Navigate to Destination
@@ -739,7 +783,7 @@ If no destination was provided, stay in the current file.
 
 ### Step 5: Import and Detach Template
 
-Run via `figma_execute` (replace `__PROPERTY_TEMPLATE_KEY__` with the key from Step 2):
+**If the user provided a cross-file destination URL** (navigated in Step 4), run via `figma_execute`:
 
 ```javascript
 const PROPERTY_TEMPLATE_KEY = '__PROPERTY_TEMPLATE_KEY__';
@@ -756,13 +800,38 @@ figma.viewport.scrollAndZoomIntoView([frame]);
 return { frameId: frame.id };
 ```
 
-Replace `__COMPONENT_NAME__` with the extracted `componentName`.
+**If no destination was provided (default)**, run via `figma_execute` — this places the spec on the component's page, to its right:
+
+```javascript
+const PROPERTY_TEMPLATE_KEY = '__PROPERTY_TEMPLATE_KEY__';
+const COMP_NODE_ID = '__COMPONENT_NODE_ID__';
+
+const compNode = await figma.getNodeByIdAsync(COMP_NODE_ID);
+let _p = compNode;
+while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
+if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
+
+const templateComponent = await figma.importComponentByKeyAsync(PROPERTY_TEMPLATE_KEY);
+const instance = templateComponent.createInstance();
+const frame = instance.detachInstance();
+
+const GAP = 200;
+frame.x = compNode.x + compNode.width + GAP;
+frame.y = compNode.y;
+
+frame.name = '__COMPONENT_NAME__ Properties';
+figma.currentPage.selection = [frame];
+figma.viewport.scrollAndZoomIntoView([frame]);
+return { frameId: frame.id, pageId: _p.id, pageName: _p.name };
+```
+
+Replace `__COMPONENT_NAME__` with the extracted `componentName`. Replace `__COMPONENT_NODE_ID__` with the node ID extracted from the component URL (same as `TARGET_NODE_ID` from Step 3).
 
 Save the returned `frameId`.
 
 ### Step 6: Fill Header Fields
 
-Run via `figma_execute` (replace `__FRAME_ID__`, `__COMPONENT_NAME__`):
+Run via `figma_execute` (replace `__FRAME_ID__`, `__COMPONENT_NAME__`, `__BRIEF_DESCRIPTION__`). Replace `__BRIEF_DESCRIPTION__` with the `briefDescription` composed during Step 3e:
 
 ```javascript
 const frame = await figma.getNodeByIdAsync('__FRAME_ID__');
@@ -789,7 +858,7 @@ if (compNameFrame) {
 const descFrame = frame.findOne(n => n.name === '#brief-component-description');
 if (descFrame) {
   const t = descFrame.findOne(n => n.type === 'TEXT');
-  if (t) t.characters = 'Configurable properties of the __COMPONENT_NAME__ component';
+  if (t) t.characters = '__BRIEF_DESCRIPTION__';
 }
 
 const markerExample = frame.findOne(n => n.name === '#marker-example');
@@ -820,6 +889,35 @@ const FONT_FAMILY = '__FONT_FAMILY__';
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const chapterTemplate = frame.findOne(n => n.name === '#anatomy-section');
 
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
+async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
+  fallbackStyle = fallbackStyle || 'Regular';
+  const allFonts = await figma.listAvailableFontsAsync();
+  const familyFonts = allFonts.filter(f => f.fontName.family === family);
+  const match = familyFonts.find(f => f.fontName.style === preferredStyle);
+  if (match) { await figma.loadFontAsync(match.fontName); return match.fontName; }
+  const fallback = familyFonts.find(f => f.fontName.style === fallbackStyle);
+  if (fallback) { await figma.loadFontAsync(fallback.fontName); return fallback.fontName; }
+  if (familyFonts.length > 0) { await figma.loadFontAsync(familyFonts[0].fontName); return familyFonts[0].fontName; }
+  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  return { family: 'Inter', style: 'Regular' };
+}
+
 const chapter = chapterTemplate.clone();
 chapterTemplate.parent.appendChild(chapter);
 chapter.name = PROPERTY_NAME;
@@ -827,19 +925,7 @@ chapter.visible = true;
 
 try {
 
-const textNodes = chapter.findAll(n => n.type === 'TEXT');
-const fontSet = new Set();
-const fontsToLoad = [];
-for (const tn of textNodes) {
-  try {
-    const fn = tn.fontName;
-    if (fn && fn !== figma.mixed && fn.family) {
-      const key = fn.family + '|' + fn.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
-    }
-  } catch {}
-}
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+await loadAllFonts(chapter);
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -898,6 +984,7 @@ for (const option of OPTIONS) {
 
   if (targetVariant) {
     const inst = targetVariant.createInstance();
+    await loadAllFonts(inst);
     wrapper.appendChild(inst);
   } else {
     const placeholder = figma.createText();
@@ -908,9 +995,9 @@ for (const option of OPTIONS) {
     wrapper.appendChild(placeholder);
   }
 
-  await figma.loadFontAsync({ family: FONT_FAMILY, style: 'Medium' });
+  const LABEL_FONT = await loadFontWithFallback(FONT_FAMILY, 'Medium');
   const label = figma.createText();
-  label.fontName = { family: FONT_FAMILY, style: 'Medium' };
+  label.fontName = LABEL_FONT;
   label.characters = option === DEFAULT_VALUE ? option + ' (default)' : option;
   label.fontSize = 14;
   label.fills = [{ type: 'SOLID', color: { r: 0.29, g: 0.29, b: 0.29 } }];
@@ -931,6 +1018,8 @@ return { success: true, property: PROPERTY_NAME };
 
 **Handle variant-gated booleans**: Before rendering, check if the boolean has `requiredVariantOverrides` (from Step 3a). If so, the base variant for instance creation must match those overrides instead of using the default variant. Replace `VARIANT_OVERRIDES` with the required overrides object (e.g., `{"Behavior": "Interactive"}`), or `null` if the boolean is not variant-gated.
 
+**Slot-aware descriptions**: Replace `__CONTROLS_SLOT_BOOL__` with the boolean's `controlsSlot` value (`true` or `false`). Replace `__SLOT_PREFERRED_NAMES_JSON__` with the boolean's `slotPreferredNames` array (e.g., `["Checkbox", "Radio"]`), or `[]` if empty. When a boolean controls a SLOT, the description reads "Controls slot: {name} (accepts: {preferred})" instead of "Controls layer: {name}".
+
 For each remaining boolean property, run via `figma_execute`:
 
 ```javascript
@@ -939,8 +1028,39 @@ const COMP_SET_ID = '__COMP_SET_NODE_ID__';
 const PROPERTY_NAME = '__PROPERTY_NAME__';
 const DEFAULT_VALUE = __DEFAULT_BOOL_VALUE__;
 const ASSOCIATED_LAYER = '__ASSOCIATED_LAYER__';
+const CONTROLS_SLOT = __CONTROLS_SLOT_BOOL__;
+const SLOT_PREFERRED_NAMES = __SLOT_PREFERRED_NAMES_JSON__;
 const VARIANT_OVERRIDES = __VARIANT_OVERRIDES_OR_NULL__;
 const FONT_FAMILY = '__FONT_FAMILY__';
+
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
+async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
+  fallbackStyle = fallbackStyle || 'Regular';
+  const allFonts = await figma.listAvailableFontsAsync();
+  const familyFonts = allFonts.filter(f => f.fontName.family === family);
+  const match = familyFonts.find(f => f.fontName.style === preferredStyle);
+  if (match) { await figma.loadFontAsync(match.fontName); return match.fontName; }
+  const fallback = familyFonts.find(f => f.fontName.style === fallbackStyle);
+  if (fallback) { await figma.loadFontAsync(fallback.fontName); return fallback.fontName; }
+  if (familyFonts.length > 0) { await figma.loadFontAsync(familyFonts[0].fontName); return familyFonts[0].fontName; }
+  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  return { family: 'Inter', style: 'Regular' };
+}
 
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const chapterTemplate = frame.findOne(n => n.name === '#anatomy-section');
@@ -952,19 +1072,7 @@ chapter.visible = true;
 
 try {
 
-const textNodes = chapter.findAll(n => n.type === 'TEXT');
-const fontSet = new Set();
-const fontsToLoad = [];
-for (const tn of textNodes) {
-  try {
-    const fn = tn.fontName;
-    if (fn && fn !== figma.mixed && fn.family) {
-      const key = fn.family + '|' + fn.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
-    }
-  } catch {}
-}
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+await loadAllFonts(chapter);
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -976,7 +1084,13 @@ const sectionDesc = chapter.findOne(n => n.name === '#optional-section-descripti
 if (sectionDesc) {
   const t = sectionDesc.findOne(n => n.type === 'TEXT');
   const defaultStr = DEFAULT_VALUE ? 'true' : 'false';
-  const layerStr = ASSOCIATED_LAYER ? '. Controls layer: ' + ASSOCIATED_LAYER : '';
+  let layerStr = '';
+  if (CONTROLS_SLOT) {
+    layerStr = '. Controls slot: ' + ASSOCIATED_LAYER;
+    if (SLOT_PREFERRED_NAMES.length > 0) layerStr += ' (accepts: ' + SLOT_PREFERRED_NAMES.join(', ') + ')';
+  } else if (ASSOCIATED_LAYER) {
+    layerStr = '. Controls layer: ' + ASSOCIATED_LAYER;
+  }
   const gateStr = VARIANT_OVERRIDES ? '. Requires ' + Object.entries(VARIANT_OVERRIDES).map(([k,v]) => k + ' = ' + v).join(', ') : '';
   if (t) t.characters = 'Boolean toggle. Default: ' + defaultStr + layerStr + gateStr;
 }
@@ -1012,7 +1126,7 @@ if (VARIANT_OVERRIDES && compNode.type === 'COMPONENT_SET') {
     : compNode;
 }
 
-await figma.loadFontAsync({ family: FONT_FAMILY, style: 'Medium' });
+const LABEL_FONT = await loadFontWithFallback(FONT_FAMILY, 'Medium');
 
 for (const boolVal of [true, false]) {
   const wrapper = figma.createFrame();
@@ -1027,18 +1141,20 @@ for (const boolVal of [true, false]) {
   assetPlaceholder.appendChild(wrapper);
 
   const inst = baseVariant.createInstance();
+  await loadAllFonts(inst);
   wrapper.appendChild(inst);
 
   for (const [rawKey, val] of Object.entries(inst.componentProperties)) {
     const cleanKey = rawKey.split('#')[0];
     if (cleanKey === PROPERTY_NAME) {
       inst.setProperties({ [rawKey]: boolVal });
+      await loadAllFonts(inst);
       break;
     }
   }
 
   const label = figma.createText();
-  label.fontName = { family: FONT_FAMILY, style: 'Medium' };
+  label.fontName = LABEL_FONT;
   const isDefault = boolVal === DEFAULT_VALUE;
   label.characters = String(boolVal) + (isDefault ? ' (default)' : '');
   label.fontSize = 14;
@@ -1074,6 +1190,35 @@ const COLLECTION_ID = '__COLLECTION_ID__';
 const MODES = __MODES_JSON__;
 const FONT_FAMILY = '__FONT_FAMILY__';
 
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
+async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
+  fallbackStyle = fallbackStyle || 'Regular';
+  const allFonts = await figma.listAvailableFontsAsync();
+  const familyFonts = allFonts.filter(f => f.fontName.family === family);
+  const match = familyFonts.find(f => f.fontName.style === preferredStyle);
+  if (match) { await figma.loadFontAsync(match.fontName); return match.fontName; }
+  const fallback = familyFonts.find(f => f.fontName.style === fallbackStyle);
+  if (fallback) { await figma.loadFontAsync(fallback.fontName); return fallback.fontName; }
+  if (familyFonts.length > 0) { await figma.loadFontAsync(familyFonts[0].fontName); return familyFonts[0].fontName; }
+  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  return { family: 'Inter', style: 'Regular' };
+}
+
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const chapterTemplate = frame.findOne(n => n.name === '#anatomy-section');
 
@@ -1098,19 +1243,7 @@ function clearModesRecursive(node, col) {
   }
 }
 
-const textNodes = chapter.findAll(n => n.type === 'TEXT');
-const fontSet = new Set();
-const fontsToLoad = [];
-for (const tn of textNodes) {
-  try {
-    const fn = tn.fontName;
-    if (fn && fn !== figma.mixed && fn.family) {
-      const key = fn.family + '|' + fn.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
-    }
-  } catch {}
-}
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+await loadAllFonts(chapter);
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -1138,7 +1271,7 @@ const defaultVariant = compNode.type === 'COMPONENT_SET'
   ? (compNode.defaultVariant || compNode.children[0])
   : compNode;
 
-await figma.loadFontAsync({ family: FONT_FAMILY, style: 'Medium' });
+const LABEL_FONT = await loadFontWithFallback(FONT_FAMILY, 'Medium');
 
 for (const mode of MODES) {
   const wrapper = figma.createFrame();
@@ -1159,7 +1292,7 @@ for (const mode of MODES) {
   clearModesRecursive(inst, collection);
 
   const label = figma.createText();
-  label.fontName = { family: FONT_FAMILY, style: 'Medium' };
+  label.fontName = LABEL_FONT;
   label.characters = mode.name === DEFAULT_VALUE ? mode.name + ' (default)' : mode.name;
   label.fontSize = 14;
   label.fills = [{ type: 'SOLID', color: { r: 0.29, g: 0.29, b: 0.29 } }];
@@ -1209,6 +1342,35 @@ const CONTROLLING_BOOL_RAW_KEY = __CONTROLLING_BOOL_RAW_KEY_OR_NULL__;
 const VARIANT_AXES = __VARIANT_AXES_JSON__;
 const FONT_FAMILY = '__FONT_FAMILY__';
 
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
+async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
+  fallbackStyle = fallbackStyle || 'Regular';
+  const allFonts = await figma.listAvailableFontsAsync();
+  const familyFonts = allFonts.filter(f => f.fontName.family === family);
+  const match = familyFonts.find(f => f.fontName.style === preferredStyle);
+  if (match) { await figma.loadFontAsync(match.fontName); return match.fontName; }
+  const fallback = familyFonts.find(f => f.fontName.style === fallbackStyle);
+  if (fallback) { await figma.loadFontAsync(fallback.fontName); return fallback.fontName; }
+  if (familyFonts.length > 0) { await figma.loadFontAsync(familyFonts[0].fontName); return familyFonts[0].fontName; }
+  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  return { family: 'Inter', style: 'Regular' };
+}
+
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const chapterTemplate = frame.findOne(n => n.name === '#anatomy-section');
 
@@ -1217,7 +1379,7 @@ const parentDefaultVariant = compNode.type === 'COMPONENT_SET'
   ? (compNode.defaultVariant || compNode.children[0])
   : compNode;
 
-await figma.loadFontAsync({ family: FONT_FAMILY, style: 'Medium' });
+const LABEL_FONT = await loadFontWithFallback(FONT_FAMILY, 'Medium');
 
 for (const axis of VARIANT_AXES) {
 
@@ -1228,19 +1390,7 @@ chapter.visible = true;
 
 try {
 
-const textNodes = chapter.findAll(n => n.type === 'TEXT');
-const fontSet = new Set();
-const fontsToLoad = [];
-for (const tn of textNodes) {
-  try {
-    const fn = tn.fontName;
-    if (fn && fn !== figma.mixed && fn.family) {
-      const key = fn.family + '|' + fn.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
-    }
-  } catch {}
-}
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+await loadAllFonts(chapter);
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -1293,12 +1443,16 @@ if (CONTROLLING_BOOL_RAW_KEY) {
   assetPlaceholder.appendChild(wrapper);
 
   const inst = parentDefaultVariant.createInstance();
+  await loadAllFonts(inst);
   wrapper.appendChild(inst);
   const boolRk = findControllingBoolRawKey(inst);
-  if (boolRk) inst.setProperties({ [boolRk]: false });
+  if (boolRk) {
+    inst.setProperties({ [boolRk]: false });
+    await loadAllFonts(inst);
+  }
 
   const label = figma.createText();
-  label.fontName = { family: FONT_FAMILY, style: 'Medium' };
+  label.fontName = LABEL_FONT;
   label.characters = 'No ' + CONTROLLING_BOOL_NAME + ' (default)';
   label.fontSize = 14;
   label.fills = [{ type: 'SOLID', color: { r: 0.29, g: 0.29, b: 0.29 } }];
@@ -1318,11 +1472,15 @@ for (const option of axis.options) {
   assetPlaceholder.appendChild(wrapper);
 
   const inst = parentDefaultVariant.createInstance();
+  await loadAllFonts(inst);
   wrapper.appendChild(inst);
 
   if (CONTROLLING_BOOL_RAW_KEY) {
     const boolRk = findControllingBoolRawKey(inst);
-    if (boolRk) inst.setProperties({ [boolRk]: true });
+    if (boolRk) {
+      inst.setProperties({ [boolRk]: true });
+      await loadAllFonts(inst);
+    }
   }
 
   const nestedChild = findNestedChild(inst, CHILD_NAME);
@@ -1330,13 +1488,14 @@ for (const option of axis.options) {
     for (const [rk, val] of Object.entries(nestedChild.componentProperties)) {
       if (rk.split('#')[0] === axis.name) {
         nestedChild.setProperties({ [rk]: option });
+        await loadAllFonts(inst);
         break;
       }
     }
   }
 
   const label = figma.createText();
-  label.fontName = { family: FONT_FAMILY, style: 'Medium' };
+  label.fontName = LABEL_FONT;
   label.characters = option === axis.defaultValue ? option + ' (default)' : option;
   label.fontSize = 14;
   label.fills = [{ type: 'SOLID', color: { r: 0.29, g: 0.29, b: 0.29 } }];
@@ -1370,6 +1529,35 @@ const CONTROLLING_BOOL_RAW_KEY = __CONTROLLING_BOOL_RAW_KEY_OR_NULL__;
 const BOOLEAN_PROPS = __BOOLEAN_PROPS_JSON__;
 const FONT_FAMILY = '__FONT_FAMILY__';
 
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
+async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
+  fallbackStyle = fallbackStyle || 'Regular';
+  const allFonts = await figma.listAvailableFontsAsync();
+  const familyFonts = allFonts.filter(f => f.fontName.family === family);
+  const match = familyFonts.find(f => f.fontName.style === preferredStyle);
+  if (match) { await figma.loadFontAsync(match.fontName); return match.fontName; }
+  const fallback = familyFonts.find(f => f.fontName.style === fallbackStyle);
+  if (fallback) { await figma.loadFontAsync(fallback.fontName); return fallback.fontName; }
+  if (familyFonts.length > 0) { await figma.loadFontAsync(familyFonts[0].fontName); return familyFonts[0].fontName; }
+  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  return { family: 'Inter', style: 'Regular' };
+}
+
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const chapterTemplate = frame.findOne(n => n.name === '#anatomy-section');
 
@@ -1378,7 +1566,7 @@ const parentDefaultVariant = compNode.type === 'COMPONENT_SET'
   ? (compNode.defaultVariant || compNode.children[0])
   : compNode;
 
-await figma.loadFontAsync({ family: FONT_FAMILY, style: 'Medium' });
+const LABEL_FONT = await loadFontWithFallback(FONT_FAMILY, 'Medium');
 
 function findControllingBoolRawKey(inst) {
   for (const [rk, val] of Object.entries(inst.componentProperties)) {
@@ -1406,19 +1594,7 @@ chapter.visible = true;
 
 try {
 
-const textNodes = chapter.findAll(n => n.type === 'TEXT');
-const fontSet = new Set();
-const fontsToLoad = [];
-for (const tn of textNodes) {
-  try {
-    const fn = tn.fontName;
-    if (fn && fn !== figma.mixed && fn.family) {
-      const key = fn.family + '|' + fn.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
-    }
-  } catch {}
-}
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+await loadAllFonts(chapter);
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -1453,11 +1629,15 @@ for (const boolVal of [true, false]) {
   assetPlaceholder.appendChild(wrapper);
 
   const inst = parentDefaultVariant.createInstance();
+  await loadAllFonts(inst);
   wrapper.appendChild(inst);
 
   if (CONTROLLING_BOOL_RAW_KEY) {
     const boolRk = findControllingBoolRawKey(inst);
-    if (boolRk) inst.setProperties({ [boolRk]: true });
+    if (boolRk) {
+      inst.setProperties({ [boolRk]: true });
+      await loadAllFonts(inst);
+    }
   }
 
   const nestedChild = findNestedChild(inst, CHILD_NAME);
@@ -1465,13 +1645,14 @@ for (const boolVal of [true, false]) {
     for (const [rk, val] of Object.entries(nestedChild.componentProperties)) {
       if (rk.split('#')[0] === boolProp.name) {
         nestedChild.setProperties({ [rk]: boolVal });
+        await loadAllFonts(inst);
         break;
       }
     }
   }
 
   const label = figma.createText();
-  label.fontName = { family: FONT_FAMILY, style: 'Medium' };
+  label.fontName = LABEL_FONT;
   const isDefault = boolVal === boolProp.defaultValue;
   label.characters = String(boolVal) + (isDefault ? ' (default)' : '');
   label.fontSize = 14;
@@ -1564,6 +1745,35 @@ const DEFAULT_LABEL = '__DEFAULT_LABEL__';
 const PREVIEW_COMBINATIONS = __PREVIEW_COMBINATIONS_JSON__;
 const FONT_FAMILY = '__FONT_FAMILY__';
 
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
+async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
+  fallbackStyle = fallbackStyle || 'Regular';
+  const allFonts = await figma.listAvailableFontsAsync();
+  const familyFonts = allFonts.filter(f => f.fontName.family === family);
+  const match = familyFonts.find(f => f.fontName.style === preferredStyle);
+  if (match) { await figma.loadFontAsync(match.fontName); return match.fontName; }
+  const fallback = familyFonts.find(f => f.fontName.style === fallbackStyle);
+  if (fallback) { await figma.loadFontAsync(fallback.fontName); return fallback.fontName; }
+  if (familyFonts.length > 0) { await figma.loadFontAsync(familyFonts[0].fontName); return familyFonts[0].fontName; }
+  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  return { family: 'Inter', style: 'Regular' };
+}
+
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const chapterTemplate = frame.findOne(n => n.name === '#anatomy-section');
 
@@ -1579,19 +1789,7 @@ chapter.visible = true;
 
 try {
 
-const textNodes = chapter.findAll(n => n.type === 'TEXT');
-const fontSet = new Set();
-const fontsToLoad = [];
-for (const tn of textNodes) {
-  try {
-    const fn = tn.fontName;
-    if (fn && fn !== figma.mixed && fn.family) {
-      const key = fn.family + '|' + fn.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
-    }
-  } catch {}
-}
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+await loadAllFonts(chapter);
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -1629,7 +1827,7 @@ function findNestedChild(parentInst, childLayerName) {
   return null;
 }
 
-await figma.loadFontAsync({ family: FONT_FAMILY, style: 'Medium' });
+const LABEL_FONT = await loadFontWithFallback(FONT_FAMILY, 'Medium');
 
 for (const combo of PREVIEW_COMBINATIONS) {
   const wrapper = figma.createFrame();
@@ -1644,10 +1842,14 @@ for (const combo of PREVIEW_COMBINATIONS) {
   assetPlaceholder.appendChild(wrapper);
 
   const inst = parentDefaultVariant.createInstance();
+  await loadAllFonts(inst);
   wrapper.appendChild(inst);
 
   const boolRk = findControllingBoolRawKey(inst);
-  if (boolRk) inst.setProperties({ [boolRk]: combo.containerOn });
+  if (boolRk) {
+    inst.setProperties({ [boolRk]: combo.containerOn });
+    await loadAllFonts(inst);
+  }
 
   if (combo.containerOn) {
     const nestedChild = findNestedChild(inst, CHILD_NAME);
@@ -1660,11 +1862,12 @@ for (const combo of PREVIEW_COMBINATIONS) {
           }
         }
       }
+      await loadAllFonts(inst);
     }
   }
 
   const label = figma.createText();
-  label.fontName = { family: FONT_FAMILY, style: 'Medium' };
+  label.fontName = LABEL_FONT;
   const isDefault = combo.label === DEFAULT_LABEL;
   label.characters = combo.label + (isDefault ? ' (default)' : '');
   label.fontSize = 14;
@@ -1699,6 +1902,35 @@ const DEFAULT_LABEL = '__DEFAULT_LABEL__';
 const PREVIEW_COMBINATIONS = __PREVIEW_COMBINATIONS_JSON__;
 const FONT_FAMILY = '__FONT_FAMILY__';
 
+async function loadAllFonts(rootNode) {
+  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const fontSet = new Set();
+  const fontsToLoad = [];
+  for (const tn of textNodes) {
+    try {
+      const fn = tn.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        const key = fn.family + '|' + fn.style;
+        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
+      }
+    } catch {}
+  }
+  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+}
+
+async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
+  fallbackStyle = fallbackStyle || 'Regular';
+  const allFonts = await figma.listAvailableFontsAsync();
+  const familyFonts = allFonts.filter(f => f.fontName.family === family);
+  const match = familyFonts.find(f => f.fontName.style === preferredStyle);
+  if (match) { await figma.loadFontAsync(match.fontName); return match.fontName; }
+  const fallback = familyFonts.find(f => f.fontName.style === fallbackStyle);
+  if (fallback) { await figma.loadFontAsync(fallback.fontName); return fallback.fontName; }
+  if (familyFonts.length > 0) { await figma.loadFontAsync(familyFonts[0].fontName); return familyFonts[0].fontName; }
+  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+  return { family: 'Inter', style: 'Regular' };
+}
+
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const chapterTemplate = frame.findOne(n => n.name === '#anatomy-section');
 
@@ -1714,19 +1946,7 @@ chapter.visible = true;
 
 try {
 
-const textNodes = chapter.findAll(n => n.type === 'TEXT');
-const fontSet = new Set();
-const fontsToLoad = [];
-for (const tn of textNodes) {
-  try {
-    const fn = tn.fontName;
-    if (fn && fn !== figma.mixed && fn.family) {
-      const key = fn.family + '|' + fn.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
-    }
-  } catch {}
-}
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+await loadAllFonts(chapter);
 
 const sectionName = chapter.findOne(n => n.name === '#section-name');
 if (sectionName) {
@@ -1757,7 +1977,7 @@ function findNestedChild(parentInst, childLayerName) {
   return null;
 }
 
-await figma.loadFontAsync({ family: FONT_FAMILY, style: 'Medium' });
+const LABEL_FONT = await loadFontWithFallback(FONT_FAMILY, 'Medium');
 
 for (const combo of PREVIEW_COMBINATIONS) {
   const wrapper = figma.createFrame();
@@ -1772,6 +1992,7 @@ for (const combo of PREVIEW_COMBINATIONS) {
   assetPlaceholder.appendChild(wrapper);
 
   const inst = parentDefaultVariant.createInstance();
+  await loadAllFonts(inst);
   wrapper.appendChild(inst);
 
   const nestedChild = findNestedChild(inst, CHILD_NAME);
@@ -1784,10 +2005,11 @@ for (const combo of PREVIEW_COMBINATIONS) {
         }
       }
     }
+    await loadAllFonts(inst);
   }
 
   const label = figma.createText();
-  label.fontName = { family: FONT_FAMILY, style: 'Medium' };
+  label.fontName = LABEL_FONT;
   const isDefault = combo.label === DEFAULT_LABEL;
   label.characters = combo.label + (isDefault ? ' (default)' : '');
   label.fontSize = 14;
@@ -1831,12 +2053,21 @@ return { success: true };
    - All preview items fit within the preview area without being clipped. Wrapping is always enabled, but if items are still too wide for a single row even individually, reduce `itemSpacing` or check that instances are not unexpectedly large.
 3. If issues are found, fix via `figma_execute` and re-capture (up to 3 iterations)
 
+### Step 8: Completion Link
+
+Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (extracted from the user's input URL) and the `frameId` (returned by Step 5), replacing `:` with `-` in the node ID:
+
+```
+Property spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameId}
+```
+
 ## Notes
 
 - The target node can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). The extraction script detects the type and returns `isComponentSet` accordingly. When the node is a standalone component, there are no variant axes — only boolean, instance swap, and variable mode properties apply. Instance creation uses `comp.createInstance()` directly.
-- The extraction script reads `componentPropertyDefinitions` from the component set or component, which captures all variant axes, boolean toggles, and instance swap properties. The `defaultProps` are built from `defaultVariant.variantProperties` (not `componentProperties`, which only has booleans/swaps).
+- The extraction script reads `componentPropertyDefinitions` from the component set or component, which captures all variant axes, boolean toggles, instance swap properties, and SLOT properties. The `defaultProps` are built from `defaultVariant.variantProperties` (not `componentProperties`, which only has booleans/swaps).
 - For variant axes, the script finds the matching variant child by iterating the component set's children and matching `variantProperties`. Other properties are kept at their defaults.
 - For boolean toggles, the script creates instances from the default variant and uses `setProperties` to flip the boolean value. However, some booleans are **variant-gated** — the layer they control only exists under specific variant axis values (e.g., a "Dismiss button" layer only exists when `Behavior=Interactive`, not `Behavior=Static`). Step 3a detects this deterministically: the script resolves the boolean's `rawKey#nodeId` across variants and returns an `interpretedBooleans` array with `requiredVariantOverrides` already computed (no AI reasoning needed). When a boolean has `requiredVariantOverrides`, 6b uses those overrides as the base variant instead of the default, and the description notes the dependency.
+- **SLOT property awareness**: The extraction script (Step 3) collects `slotProps` — native SLOT properties with `name`, `description`, and `preferredInstances`. SLOT properties do not produce their own visual chapters (slot content is freeform, not a finite set of options). Instead, slot content is documented by the API skill (Pattern A sub-component tables), the structure skill (`slotContent` sections), and the anatomy skill (preferred instance sections). The `slotProps` array is returned for informational completeness and to support boolean-to-slot linkage: when a boolean's associated layer is a SLOT node, the boolean entry gains `controlsSlot: true` and `slotPreferredNames` (resolved from the SLOT's `preferredValues`). The 6b rendering script uses these fields to produce richer descriptions — "Controls slot: {name} (accepts: {preferred})" — instead of the generic "Controls layer: {name}".
 - The property template key is stored in `uspecs.config.json` under `templateKeys.propertyOverview` and is configured via `@firstrun`. This is a dedicated property template with the header already set to "Property" — no renaming needed.
 - Each variant option is shown in a horizontal layout inside the `#preview`. `layoutWrap: 'WRAP'` is always enabled so items wrap to additional rows instead of overflowing. The template's `clipsContent: true` is preserved to prevent any overflow beyond the preview bounds.
 - New chapters are appended to the Content parent via `appendChild` (not inserted at a table index).

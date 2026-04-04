@@ -120,11 +120,22 @@ for (const tn of textNodes) {
 await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
 ```
 
-**Loading fonts from component instances** — component instances may use fonts not present in the template's static text nodes (e.g., a component using "Uber Move" when the template uses "Inter"). After creating a component instance via `createInstance()`, and after any operation that may reveal new text nodes (`setProperties`, `appendChild` for slot content, `directUnhide`), call `loadAllFonts` on the instance before performing further mutations:
+**Loading fonts from component instances** — component instances may use fonts not present in the template's static text nodes (e.g., a component using "Uber Move" when the template uses "Inter"). After creating a component instance via `createInstance()`, and after any operation that may reveal new text nodes (`setProperties`, `appendChild` for slot content, `directUnhide`), call `loadAllFonts` on the instance before performing further mutations.
+
+**Slot safety:** Component instances containing SLOT nodes cannot be traversed with `findAll` or `findOne` — these methods crash with `"Node with id ... not found"` when they encounter default slot children with compound IDs (see Slot mutation ordering constraint above). The `loadAllFonts` function uses a manual recursive collector with per-node try-catch instead of `findAll` to handle this safely:
 
 ```javascript
 async function loadAllFonts(rootNode) {
-  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const textNodes = [];
+  function collect(node) {
+    try {
+      if (node.type === 'TEXT') textNodes.push(node);
+      if ('children' in node && node.children) {
+        for (const c of node.children) { try { collect(c); } catch {} }
+      }
+    } catch {}
+  }
+  collect(rootNode);
   const fontSet = new Set();
   const fontsToLoad = [];
   for (const tn of textNodes) {
@@ -207,6 +218,45 @@ await loadAllFonts(compInstance); // inserted child may bring new fonts — see 
 
 Inserting into a SLOT triggers auto-layout reflow on the parent. Re-read dimensions and bounding boxes after population if marker placement or sizing depends on them.
 
+**Slot mutation ordering constraint** — after `appendChild` into a SLOT, the child instance's internal nodes receive compound IDs (e.g., `I6291:650;6015:5301`). These compound references are **inaccessible** via `findOne`, `findAll`, and `setProperties` — calls will crash with `"The node with id ... does not exist"`. All mutations on a child instance must happen **before** `appendChild` into the slot:
+
+```javascript
+// CORRECT: mutate first, then adopt into slot
+const child = contentComponent.createInstance();
+await loadAllFonts(child);
+child.setProperties({ 'show subtext#6015:7': true }); // works — child is free-floating
+await loadAllFonts(child);
+const textNode = child.findOne(n => n.type === 'TEXT' && n.name === 'subtext'); // works
+if (textNode) textNode.characters = 'Supporting context';
+slotNode.appendChild(child); // compound IDs assigned here — no more mutations on child internals
+await loadAllFonts(parentInstance);
+```
+
+```javascript
+// INCORRECT: mutate after adoption — will crash
+const child = contentComponent.createInstance();
+slotNode.appendChild(child);
+child.setProperties({ ... }); // may crash — compound IDs
+child.findOne(n => n.type === 'TEXT'); // crashes: "node with id ... does not exist"
+```
+
+**Default slot children** (instances already inside a slot when the parent instance is created) have compound IDs from the start. Calling `setProperties` or `findOne` on them after any mutation may crash or leave references stale. The workaround is to remove the default child and insert a fresh instance with pre-applied overrides:
+
+```javascript
+const slot = parentInstance.findOne(n => n.type === 'SLOT' && n.name === 'title slot');
+// Remove inaccessible default child
+while (slot.children.length > 0) slot.children[0].remove();
+// Insert fresh instance with overrides applied before adoption
+const fresh = titleContentComponent.createInstance();
+await loadAllFonts(fresh);
+fresh.setProperties({ 'show subtext#6015:7': true });
+await loadAllFonts(fresh);
+const tn = fresh.findOne(n => n.type === 'TEXT' && n.name === 'subtext');
+if (tn) tn.characters = 'Supporting context';
+slot.appendChild(fresh);
+await loadAllFonts(parentInstance);
+```
+
 **Resetting slots** — `slotNode.resetSlot()` reverts slot content to the main component's default. Useful for cleanup or undo scenarios.
 
 **Reading slot properties** — `componentPropertyDefinitions` entries with `type: 'SLOT'` expose:
@@ -222,7 +272,7 @@ if (cpRefs.visible) {
 }
 ```
 
-**Current skill support:** `create-anatomy` handles SLOT nodes with dedicated extraction, classification, preferred-instance resolution, and rendering logic. `create-structure` detects SLOT properties with `preferredValues` and generates dedicated `slotContent` sections per preferred component — measuring contextual dimensions (padding, constraints, alignment) when each preferred component is placed inside the slot across all parent sizes. `create-api` extracts `slotProps` with preferred instances and default children for Pattern A sub-component tables. `create-property` extracts `slotProps` for informational completeness and detects boolean-to-slot linkage — when a boolean controls a SLOT's visibility, the property exhibit description reads "Controls slot" with preferred content names instead of the generic "Controls layer". SLOT properties do not produce their own property chapters (slot content is freeform). `create-voice` deep-recurses into SLOT nodes during extraction to discover interactive children as individual focus stops — a SLOT containing 2 buttons yields 2 separate entries for merge analysis. It also reads `slotVisibility` (boolean bindings on SLOT nodes) so the AI can account for conditional focus stops that appear/disappear between states. Other skills interact with slot-based components at the design-pattern level (composable children, container detection) without SLOT-specific node handling.
+**Current skill support:** `create-anatomy` handles SLOT nodes with dedicated extraction, classification, preferred-instance resolution, and rendering logic. `create-structure` detects SLOT properties with `preferredValues` and generates dedicated `slotContent` sections per preferred component — measuring contextual dimensions (padding, constraints, alignment) when each preferred component is placed inside the slot across all parent sizes. `create-api` extracts `slotProps` with preferred instances and default children for Pattern A sub-component tables. `create-property` extracts `slotProps` for informational completeness and detects boolean-to-slot linkage — when a boolean controls a SLOT's visibility, the property exhibit description reads "Controls slot" with preferred content names instead of the generic "Controls layer". SLOT properties do not produce their own property chapters (slot content is freeform). `create-voice` deep-recurses into SLOT nodes during extraction to discover interactive children as individual focus stops — a SLOT containing 2 buttons yields 2 separate entries for merge analysis. It also reads `slotVisibility` (boolean bindings on SLOT nodes) so the AI can account for conditional focus stops that appear/disappear between states. `create-color` uses the slot-safe `loadAllFonts` pattern for extraction (Step 4b boolean enrichment) and rendering (Step 11 preview instances). The AI reasoning layer (Step 4c) evaluates sub-component token ownership — entries with `subComponentName` from slot-hosted sub-components are filtered based on whether the parent or the sub-component owns the color (see the instruction file's token ownership framework). Other skills interact with slot-based components at the design-pattern level (composable children, container detection) without SLOT-specific node handling.
 
 ### Console MCP Tools
 

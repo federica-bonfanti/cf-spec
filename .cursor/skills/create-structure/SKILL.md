@@ -523,6 +523,8 @@ Save the returned JSON. The extraction returns:
 
 The instruction file (`agent-structure-instruction.md`) documents how to interpret the data shapes — collapsed dimensions, typography composites, display strings, and logical directions. Refer to it for row emission rules.
 
+**Response truncation:** The MCP tool may truncate responses exceeding ~20KB. If the returned JSON is missing expected fields (`subComponents`, `slotContents`, or later `variants` entries), run a targeted follow-up `use_figma` call that extracts only the missing fields (e.g., just `subComponents` and `slotContents` with their metadata, without the full recursive `children` and `dimensions` trees). Do not re-run the full extraction script — extract only what was lost.
+
 You will use `componentName`, `compSetNodeId`, `variantAxes`, `propertyDefs`, `booleanDefs`, `variants`, `enrichedTree`, `subComponents`, `slotContents`, and each variant's `layoutTree` in subsequent steps.
 
 **4c. Check variable modes:**
@@ -872,7 +874,52 @@ sectionPlan = [
 
 Produce the final `sectionPlan` with any adjustments.
 
-**B–E. Apply the interpretation quality guidance from the instruction file** — design-intent notes, cross-section pattern recognition, anomaly detection, and completeness judgment. These are documented in the "Interpretation Quality Guidance" section of `agent-structure-instruction.md`.
+**B. Write design-intent notes:**
+
+For each property row you will generate, write notes that answer **"why this value?"** not just **"what is this property?"**. You have full dimensional data across all variants and sub-components — use it.
+
+| Instead of this | Write this |
+|---|---|
+| "Tap target" | "Meets WCAG 2.5.8 minimum touch target (44px) with 12px optical margin" |
+| "Inset from edges" | "Accommodates multi-line secondary text at spacious density" |
+| "Pill shape" | "Uses half of minHeight — pill shape scales with container height" |
+| "Icon size" | "Matches platform icon grid (20dp Android, 20pt iOS)" |
+| "Gap between icon and label" | "Scales with size axis: 4→6→8→8 maintains optical balance at each size" |
+
+Use the cross-variant data to identify scaling patterns and explain them in notes.
+
+**C. Cross-section pattern recognition:**
+
+After reviewing all sections together, identify and document:
+- **General notes** describing system-wide patterns: e.g., "All sub-components share the `spacing-inset-*` token family for horizontal padding, scaling from 12 (compact) to 20 (spacious)"
+- **Consistency observations** in section descriptions: e.g., "Leading and trailing content slots have identical minWidth and alignment — designed as symmetrical containers"
+- **Cross-references between sections** when one section's values explain another's: e.g., "Composition section shows Label uses `small` variant at XSmall parent size — this is why the Label section's XSmall column has different padding than other sizes"
+
+These observations go into `generalNotes` and `sectionDescription` fields.
+
+**D. Anomaly detection:**
+
+Before generating structured data, scan the extraction and cross-variant data for:
+- **Scaling inconsistencies:** A sub-component whose minHeight doesn't scale with the parent's size axis — intentional or a design bug? Flag in notes.
+- **Token misconfiguration:** A token binding that resolves to the same value across all density modes — the token exists but doesn't differentiate. Note it.
+- **Asymmetric padding without explanation:** paddingStart=16, paddingEnd=12 — optical correction or mistake? If intentional, the note should explain why.
+- **Missing token bindings:** A hardcoded value surrounded by token-bound siblings — was the binding missed, or is it intentionally hardcoded? Flag for engineering awareness.
+- **Stroke/border state changes:** Compare `stateComparison` data — does a border appear, disappear, or change weight between states? Flag as a state-conditional section candidate if not already in the plan.
+
+Add anomaly notes to the relevant row's `notes` field or to `generalNotes` for component-wide issues.
+
+**E. Completeness judgment:**
+
+Before proceeding, verify:
+- Does every auto-layout container in the extraction have its padding and spacing documented in a section row?
+- Does every sub-component discovered in the `enrichedTree` have its own section?
+- Are there dimensional properties present in `rootDimensions` or `subComponentDimensions` that were not included in any row?
+- For composition sections: does every sub-component's size mapping cover all parent sizes?
+- Are typography styles documented for every TEXT node in the enriched tree?
+
+If gaps exist that cannot be filled from the extraction data, add a note in `generalNotes`: e.g., "Trailing content slot dimensions not documented — slot was empty in all inspected variants."
+
+The instruction file (`agent-structure-instruction.md`, "Interpretation Quality Guidance" section) contains additional detail and examples for each of these steps.
 
 ### Step 7: Generate Structured Data
 
@@ -1024,6 +1071,9 @@ Before rendering, determine the preview configuration for the current section. T
 | **Behavior/Configuration** (columns are size names) | `''` | Size axis name | Size names from the axis | `[]` (use default configuration only) | `[]` |
 | **State-conditional** (columns show default vs active state) | `''` | `''` | State names | Set state variant property per column | `[]` |
 | **Slot content** (columns are parent size names showing a preferred component) | The preferred component's own component set ID (`preferredComponentSetId` from the section plan) or `componentId` if not in a set | The preferred component's size axis name (from `slotContents[].preferredComponents[].variantAxes`) | Size names from the **parent's** size axis | `[]` | Boolean properties to enable on each preferred component instance (from `slotContents[].preferredComponents[].booleanDefs` — set all values to `true`) |
+| **Boolean-toggled** (standalone component with booleans controlling structural elements like slots, accessories, subtext) | `''` | `''` | One label per meaningful boolean combination (e.g., `["Default", "With subtext", "No micro button"]`) | Each entry is a `PROPERTY_OVERRIDES` object setting the relevant booleans for that combination | `[]` |
+
+**Boolean-toggled previews:** For standalone components with no variant axes, show meaningful boolean combinations as separate labeled preview instances. Always include the default state (all booleans at their defaults) plus the fully-enabled state. When the section documents a specific boolean-controlled element (e.g., heading accessory, subtext), show both the on and off states for that element.
 
 **Sub-component preview sourcing:** When `SUB_COMP_SET_ID` is non-empty, the preview script creates instances from the **sub-component's own component set** instead of the parent's `COMP_SET_ID`. This ensures sub-component section previews show the sub-component in isolation (e.g., four Label instances at different sizes) rather than four full parent component instances. The `SUB_COMP_OVERRIDES` parameter specifies boolean properties to enable on each sub-component instance after creation, so optional internal children (e.g., character count, status icon) are visible in the preview. Both `subCompSetId` and `booleanOverrides` are pre-resolved by the enhanced extraction script (Step 4b) — no additional `figma_execute` exploration is needed to discover them.
 
@@ -1175,8 +1225,10 @@ for (const rowData of ROWS) {
 }
 
 rowTemplate.remove();
-return { success: true, section: SECTION_NAME };
+return { success: true, section: SECTION_NAME, sectionId: section.id };
 ```
+
+Save the returned `sectionId` — pass it to Step 11c as `__SECTION_ID__` so the preview script can locate the section by ID instead of by name.
 
 #### Step 11c: Populate this section's preview
 
@@ -1184,8 +1236,7 @@ return { success: true, section: SECTION_NAME };
 
 Replace the following placeholders with the values from Step 11a:
 
-- `__FRAME_ID__` — the root frame ID from Step 9
-- `__SECTION_NAME__` — the section name (same as used in 11b)
+- `__SECTION_ID__` — the section's node ID returned by Step 11b (`sectionId` in the return value)
 - `__COMP_SET_NODE_ID__` — the component set (or standalone component) node ID
 - `__SUB_COMP_SET_NODE_ID__` — the sub-component's own component set ID from `subComponents[].subCompSetId` in Step 4b (empty string `''` for non-sub-component sections)
 - `__DEFAULT_PROPS_JSON__` — object mapping all variant axis names to their default values (from `variantAxes` in Step 4b extraction). When `SUB_COMP_SET_ID` is non-empty, use the sub-component's own variant axes defaults from `subComponents[].subCompVariantAxes` instead.
@@ -1195,8 +1246,7 @@ Replace the following placeholders with the values from Step 11a:
 - `__SUB_COMP_OVERRIDES_JSON__` — object mapping sub-component boolean property keys to `true`, from `subComponents[].booleanOverrides` in Step 4b (empty object `{}` for non-sub-component sections)
 
 ```javascript
-const FRAME_ID = '__FRAME_ID__';
-const SECTION_NAME = '__SECTION_NAME__';
+const SECTION_ID = '__SECTION_ID__';
 const COMP_SET_ID = '__COMP_SET_NODE_ID__';
 const SUB_COMP_SET_ID = '__SUB_COMP_SET_NODE_ID__';
 const DEFAULT_PROPS = __DEFAULT_PROPS_JSON__;
@@ -1235,12 +1285,14 @@ async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
   return { family: 'Inter', style: 'Regular' };
 }
 
-const frame = await figma.getNodeByIdAsync(FRAME_ID);
-const section = frame.findOne(n => n.name === SECTION_NAME);
-if (!section) return { error: 'Section not found: ' + SECTION_NAME };
+const section = await figma.getNodeByIdAsync(SECTION_ID);
+if (!section) return { error: 'Section not found: ' + SECTION_ID };
+
+let _p = section; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
+if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
 
 const preview = section.findOne(n => n.name === '#Preview');
-if (!preview) return { error: 'No #Preview frame in section: ' + SECTION_NAME };
+if (!preview) return { error: 'No #Preview frame in section: ' + SECTION_ID };
 
 const useSubComp = SUB_COMP_SET_ID && SUB_COMP_SET_ID !== '';
 const sourceId = useSubComp ? SUB_COMP_SET_ID : COMP_SET_ID;
@@ -1280,7 +1332,7 @@ for (let i = 0; i < COLUMN_VALUES.length; i++) {
     targetVariant = compNode;
   }
 
-  instances.push({ colValue, targetVariant });
+  instances.push({ colValue, targetVariant, overrideIndex: i });
 }
 
 const LABEL_FONT = await loadFontWithFallback(FONT_FAMILY, 'Medium');
@@ -1310,6 +1362,10 @@ for (const entry of instances) {
       inst.setProperties(SUB_COMP_OVERRIDES);
       await loadAllFonts(inst);
     }
+    if (!useSubComp && PROPERTY_OVERRIDES.length > entry.overrideIndex && Object.keys(PROPERTY_OVERRIDES[entry.overrideIndex]).length > 0) {
+      inst.setProperties(PROPERTY_OVERRIDES[entry.overrideIndex]);
+      await loadAllFonts(inst);
+    }
     wrapper.appendChild(inst);
     entry._inst = inst;
   }
@@ -1325,7 +1381,7 @@ for (const entry of instances) {
   wrappers.push({ wrapper, entry });
 }
 
-return { success: true, section: SECTION_NAME };
+return { success: true, section: SECTION_ID };
 ```
 
 ### Step 12: Visual Validation

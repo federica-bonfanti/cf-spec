@@ -271,6 +271,16 @@ if (isComponentSet && node.variantGroupProperties) {
   }
 }
 
+const textNodeMap = [];
+const allTextNodes = defaultVariant.findAll ? defaultVariant.findAll(n => n.type === 'TEXT') : [];
+for (const tn of allTextNodes) {
+  textNodeMap.push({
+    name: tn.name,
+    characters: tn.characters,
+    parentName: tn.parent ? tn.parent.name : null
+  });
+}
+
 return {
   componentName: node.name,
   compSetNodeId: TARGET_NODE_ID,
@@ -282,7 +292,8 @@ return {
   composableChildren,
   variantAxesObj,
   defaultProps,
-  defaultVariantName: defaultVariant.name
+  defaultVariantName: defaultVariant.name,
+  textNodeMap
 };
 ```
 
@@ -295,8 +306,11 @@ Save the returned JSON. This provides:
 - `composableChildren` — for legacy components without native SLOT nodes: child INSTANCE nodes found in the default variant, each with `componentName`, `componentKey`, `contextualOverrides`, and optional `parentLayer` (the containing frame name). Empty when `slotProps` is populated.
 - `defaultProps` — default variant property values for variant matching in configuration examples
 - `defaultVariantName` — for fallback identification
+- `textNodeMap` — array of `{ name, characters, parentName }` for every TEXT node in the default variant. Use the `name` field (not `parentName`) as the key in `textOverrides` and `slotInsertions[].textOverrides`. This eliminates guessing layer names from frame structure or design context output. Layer names are case-sensitive.
 
 Use this structured data in Step 5 to identify properties deterministically rather than relying solely on MCP tool interpretation. When building sub-component tables (Pattern A or B), use `slotProps.defaultChildren.contextualOverrides` or `composableChildren.contextualOverrides` to populate the `default` column with context-specific values rather than the component's global defaults.
+
+When building configuration examples (Step 12), use `slotProps` to populate `slotInsertions`: the slot name comes from `slotProps[].name` (e.g., `"trailing content slot"`), and the `componentNodeId` comes from the preferred instance node IDs discovered during Step 4 context gathering (e.g., the node IDs returned for trailing preferred instances). Use `textOverrides` for any text values shown in the example table that differ from the component's default text — look up the exact TEXT node layer name from `textNodeMap` (e.g., if `textNodeMap` shows `{ name: "section heading", characters: "Section heading", parentName: "title" }`, use `"section heading"` as the key, not `"title"`).
 
 ### Step 5: Identify Properties
 
@@ -592,10 +606,12 @@ return { success: true };
 
 Run **one `figma_execute` call per configuration example** to avoid timeouts.
 
-For each example, run (replace `__FRAME_ID__`, `__EXAMPLE_TITLE__`, `__COMPONENT_SET_NODE_ID__`, `__VARIANT_PROPERTIES_JSON__`, `__CHILD_OVERRIDES_JSON__`, and `__EXAMPLE_PROPERTIES_JSON__`):
+For each example, run (replace `__FRAME_ID__`, `__EXAMPLE_TITLE__`, `__COMPONENT_SET_NODE_ID__`, `__VARIANT_PROPERTIES_JSON__`, `__CHILD_OVERRIDES_JSON__`, `__TEXT_OVERRIDES_JSON__`, `__SLOT_INSERTIONS_JSON__`, and `__EXAMPLE_PROPERTIES_JSON__`):
 
 - `__VARIANT_PROPERTIES_JSON__` is an object mapping **Figma property keys** (exactly as returned by `componentPropertyDefinitions`) to values. This is used to instantiate and configure the live component preview. Include variant axes and boolean toggles needed for the example.
 - `__CHILD_OVERRIDES_JSON__` is an array of per-child property override objects for composable slot children (index 0 = first child). Use `[]` when no child overrides are needed. Each entry maps Figma property keys to values, same format as `variantProperties`.
+- `__TEXT_OVERRIDES_JSON__` is an object mapping **Figma layer names** to new text content (e.g., `{ "Label": "Submit" }`). Applied to TEXT nodes inside the main instance. Use `{}` when no text overrides are needed.
+- `__SLOT_INSERTIONS_JSON__` is an array of slot insertion objects. Each has `slotName` (SLOT node name), `componentNodeId` (local component node ID to instantiate), and optional `nestedOverrides` (component properties for `setProperties()`) and `textOverrides` (TEXT node content overrides on the inserted child). All overrides are applied **before** `appendChild` into the slot — after adoption, the child's internal nodes get compound IDs and become inaccessible. Use `[]` when no slot insertions are needed.
 
 ```javascript
 const FRAME_ID = '__FRAME_ID__';
@@ -603,6 +619,8 @@ const EXAMPLE_TITLE = '__EXAMPLE_TITLE__';
 const COMPONENT_SET_ID = '__COMPONENT_SET_NODE_ID__';
 const VARIANT_PROPS = __VARIANT_PROPERTIES_JSON__;
 const CHILD_OVERRIDES = __CHILD_OVERRIDES_JSON__;
+const TEXT_OVERRIDES = __TEXT_OVERRIDES_JSON__;
+const SLOT_INSERTIONS = __SLOT_INSERTIONS_JSON__;
 const EXAMPLE_PROPERTIES = __EXAMPLE_PROPERTIES_JSON__;
 
 async function loadAllFonts(rootNode) {
@@ -678,6 +696,51 @@ if (preview) {
         const child = slot.children[i];
         if (child.type === 'INSTANCE' && Object.keys(CHILD_OVERRIDES[i]).length > 0) {
           try { child.setProperties(CHILD_OVERRIDES[i]); } catch (e) {}
+        }
+      }
+    }
+    await loadAllFonts(instance);
+  }
+
+  // Apply text overrides to TEXT nodes inside the instance
+  if (TEXT_OVERRIDES && Object.keys(TEXT_OVERRIDES).length > 0) {
+    await loadAllFonts(instance);
+    for (const [layerName, newText] of Object.entries(TEXT_OVERRIDES)) {
+      const textNode = instance.findOne(n => n.type === 'TEXT' && n.name === layerName);
+      if (textNode) {
+        textNode.characters = newText;
+      }
+    }
+  }
+
+  // Insert content into named SLOT nodes
+  if (SLOT_INSERTIONS && SLOT_INSERTIONS.length > 0) {
+    for (const insertion of SLOT_INSERTIONS) {
+      const slotNode = instance.findOne(
+        n => n.type === 'SLOT' && n.name === insertion.slotName
+      );
+      if (slotNode) {
+        const comp = await figma.getNodeByIdAsync(insertion.componentNodeId);
+        if (comp && comp.type === 'COMPONENT') {
+          const child = comp.createInstance();
+          await loadAllFonts(child);
+          // Apply all overrides BEFORE appendChild — after slot adoption, child nodes get compound IDs and become inaccessible
+          if (insertion.nestedOverrides && Object.keys(insertion.nestedOverrides).length > 0) {
+            try {
+              child.setProperties(insertion.nestedOverrides);
+              await loadAllFonts(child);
+            } catch (e) {}
+          }
+          if (insertion.textOverrides && Object.keys(insertion.textOverrides).length > 0) {
+            for (const [layerName, newText] of Object.entries(insertion.textOverrides)) {
+              const tn = child.findOne(n => n.type === 'TEXT' && n.name === layerName);
+              if (tn) {
+                tn.characters = newText;
+              }
+            }
+          }
+          slotNode.appendChild(child);
+          await loadAllFonts(instance);
         }
       }
     }

@@ -183,10 +183,10 @@ When a child node is an INSTANCE (e.g., an icon, badge, or illustration), the ex
 ### Organizing into Sections
 
 When planning your sections:
-1. **For each axis, ask:** Should this be columns or a separate section? (see decision framework below)
-2. **Identify sub-components** and create sections for each
-3. **Identify hierarchical relationships** (container → child properties)
-4. **Order sections:** Composition section first (if applicable), then parent container, then sub-components in visual order, then state-conditional sections last
+1. **Start with composition:** If the component has 2+ structural zones (sub-components with size variants, or a mix of slots and content areas), create a composition section first. This serves as the structural overview and documents the host container's properties — do not create a separate "container" section.
+2. **For each axis, ask:** Should this be columns or a separate section? (see decision framework below)
+3. **Identify structural zones** and create a section for each zone's internals
+4. **Order sections:** Composition section first, then zone-specific sections in visual order (leading → middle → trailing), then slot content sections (grouped by slot: leading → trailing, one per preferred component), then state-conditional sections last
 
 ---
 
@@ -215,6 +215,8 @@ For sub-components like `leadingContent` that can contain buttons, switches, ico
 1. **Document slot-specific properties** — alignment, inner padding, spacing within the slot
 2. **Use references** — "See Button spec" or "See Icon spec" for nested component internals
 3. **Create a separate section** for each significant sub-component
+
+**Boundary rule (universal):** Whenever you write "See X spec" in a section description, you are deferring X's internals to its own spec. From that point, document only the **hosting container** — the slot or frame that holds X (its sizing mode, padding, spacing, alignment, clipsContent). Do NOT document X's own internal properties (padding, cornerRadius, borderWidth, iconSize, etc.) in that section. This rule applies to all section types: sub-component sections, slot content sections, and any custom section for a default slot child or nested component.
 4. **Sub-component section previews show the sub-component directly** — not the parent. When a section documents a sub-component (e.g., Label), its preview creates instances from the sub-component's own component set. This shows four Label instances at different sizes, not four full Text Field instances. The sub-component's component set ID (`subCompSetId`) and boolean overrides (`booleanOverrides`) are pre-resolved by the extraction in the `subComponents` array — no separate exploration step needed.
 
 ### Sub-Component Discovery
@@ -238,33 +240,44 @@ No manual `figma_execute` calls are needed for sub-component discovery — the e
 
 ## Composition Sections
 
-Some components are **composed of multiple sub-components** (e.g., a Text Field is composed of a Label, an Input, and a Hint Text). When this is the case, add a **composition section** before the dimensional spec sections to show which sub-component variant maps to each parent size.
+The composition section is the **structural overview** of a component — it maps the component's layout zones and how they relate. It is always the **first section** and replaces the need for a separate "container" section. Subsequent sections document each zone's internals.
 
 ### When to use
 
-Add a composition section when the component:
-- Contains 2+ distinct sub-components that are separate design elements
-- The sub-components have their own size variants that map to the parent's size variants
+Add a composition section when the component has **2+ distinct structural zones** that an engineer needs to understand as a layout map. This includes:
 
-Not every component needs this. A Button with a leading icon does **not** need a composition table — the icon is a slot, not a separately-specced sub-component. A Text Field composed of Label + Input + Hint Text **does** need one.
+- **Sub-component composition:** The component contains 2+ sub-component instances with their own size variants that map to the parent's size variants (e.g., Text Field = Label + Input + Hint Text). The composition maps parent size → sub-component variant.
+- **Slot-and-content composition:** The component has a mix of slots and internal content areas that form distinct structural zones (e.g., Section Heading = Leading slot + Heading area + Trailing slot). The composition documents the host container's properties (padding, spacing, alignment) and each zone's container-level properties (widthMode, heightMode, clipsContent).
+
+Not every component needs this. A Button with a leading icon does **not** need a composition table — it has one primary container with simple children. A Text Field composed of Label + Input + Hint Text **does** need one. A Section Heading with leading slot + heading + trailing slot **does** need one.
+
+### Two composition patterns
+
+**Pattern A — Sub-component variant mapping** (component has size variants):
+- Columns match the parent's size axis (e.g., Large | Medium | Small | XSmall)
+- Row values are the sub-component variant names at each parent size
+- The first column header is `"Composition"` (not `"Spec"`)
+
+**Pattern B — Structural map** (standalone component or no size variants):
+- Uses `"Spec"` as the first column header with a single `"Default"` value column
+- Rows document the host container's properties as a group, followed by each structural zone as a group with its container-level properties
+- The host container's own dimensional properties (padding, spacing, alignment, heightMode) are documented here — not in a separate "container" section
+- Each zone listed in the composition gets its own dedicated section afterward for its internals
 
 ### How to structure
 
-A composition section uses the same table format as a spec section, but:
-- The first column header is `"Composition"` (not `"Spec"`)
-- Row `spec` values are sub-component names (e.g., `"label size"`, `"input size"`, `"hint"`)
-- Row `values` are the sub-component variant names at each parent size (e.g., `"large"`, `"medium"`, `"small"`)
+Common to both patterns:
 - The `sectionName` should be `"{ComponentName} composition"`
-- The preview should show one labeled instance of the parent component per size column, with sub-components visible
+- The preview should show labeled instances of the parent component with all structural zones visible
 - Place this section **first**, before any dimensional spec sections
 
 ### Schema
 
-Use the same section structure as a spec section. The only difference is semantic — the values are sub-component variant names rather than dimensional measurements.
+Use the same section structure as a spec section. For Pattern A, the values are sub-component variant names. For Pattern B, the values are dimensional measurements and sizing modes.
 
-### Example
+### Examples
 
-**Text field composition**
+**Pattern A — Text field composition** (sub-component variant mapping with size axis)
 
 - Section name: "Text field composition"
 - Description: "Text field is composed of the label, input, and hint text area. In design each part is a sub component; this might not be the case for how it is coded."
@@ -276,6 +289,34 @@ Use the same section structure as a spec section. The only difference is semanti
 | label size | large | medium | small | xsmall | label sub component |
 | input size | large | medium | small | xsmall | input sub component |
 | hint | default | default | default | xsmall | hint text sub component |
+
+Subsequent sections: Label (internals), Input (internals), Hint text (internals)
+
+**Pattern B — Section heading composition** (structural map, standalone component)
+
+- Section name: "Section heading composition"
+- Description: "Section heading is composed of an optional leading slot, a heading area (title + optional micro button + optional subtext), and an optional trailing slot. Horizontal padding defaults to 16 but is customizable."
+- Preview: Boolean-toggled instances — Default, With subtext, Full (all slots visible)
+- Columns: Spec | Default | Notes
+
+| Spec | Default | Notes |
+|---|---|---|
+| Host container | – | Root horizontal layout |
+| ├─ horizontalPadding | 16 | Customizable — default inset from screen edges |
+| ├─ contentSpacing | 8 | Gap between leading, heading, and trailing areas |
+| ├─ verticalAlignment | center | All slot content vertically centered |
+| └─ heightMode | hug | Height adapts to content |
+| Leading content slot | – | Slot — no preferred instances |
+| ├─ widthMode | hug | Adapts to content |
+| └─ clipsContent | true | Prevents slot overflow |
+| Heading | – | Fills space between leading and trailing |
+| ├─ widthMode | fill | Grows to available width |
+| └─ heightMode | hug | Grows with title + subtext content |
+| Trailing content slot | – | Three preferred instances: trailing text, icon buttons, text button |
+| ├─ widthMode | hug | Adapts to content |
+| └─ clipsContent | true | Prevents slot overflow |
+
+Subsequent sections: Heading (internals — title text, micro button, subtext), Trailing content — Trailing text, Trailing content — Icon buttons, Trailing content — Text button
 
 ---
 
@@ -360,6 +401,10 @@ The `self` measurements capture the preferred component's contextual dimensions 
 The `slotContext` measurements capture the SLOT node itself:
 - **Slot padding** — inner padding of the slot container
 - **Slot dimensions** — min/max width/height of the slot
+
+**Slot container property ownership:** The slot container's own structural properties (sizing mode, alignment, clipsContent) are constant regardless of what content is placed inside. These belong as **group rows in the composition section** — not repeated in each slotContent section. SlotContent sections document only what is **unique to a specific preferred component** being placed in the slot: dimensional differences from the component's standalone defaults caused by slot context constraints (e.g., auto-layout reflow, constrained sizes, alignment overrides).
+
+**Boundary rule for preferred components:** When a slot content section references another component's spec ("See X spec for component internals"), document only what is **unique to this preferred component's placement** — dimensional differences from the component's standalone defaults caused by the slot's auto-layout constraints (e.g., reflow causing different width/height, alignment overrides). Slot container properties (sizing mode, alignment, clipsContent) belong in the composition section, not here. Do NOT document the preferred component's own internal properties from `self` (padding, cornerRadius, minWidth, iconSize) — those belong to the component's own spec. Only document `self` measurements when they **differ from the component's standalone defaults** due to slot context constraints.
 
 ### Design-intent notes
 
@@ -472,7 +517,7 @@ Organize the data you gather into the following logical structure before renderi
 |-------|------|
 | `componentName` | Component name: "Button", "List item", "Section heading" |
 | `generalNotes` | Optional. Use for component-wide notes about density modes, variable usage, etc. |
-| `sections` | At least one section. First section is typically the parent container. |
+| `sections` | At least one section. First section is typically the composition section (structural overview). |
 | `sectionName` | Descriptive name: "Button sizes", "Leading content", "Shape variants" |
 | `sectionDescription` | Optional. Use for "See X spec" references or explanatory prose. |
 | `preview` | Which component variant instances to show — typically one labeled instance per value column, varying the section's axis while keeping other axes at defaults |
@@ -516,7 +561,7 @@ Container          –      –      –     Tap target
 
 | Rule | Guidance |
 |------|----------|
-| Section order | Composition section first (if applicable), then parent container, then sub-components in visual order (leading → middle → trailing), then slot content sections (grouped by slot: leading → trailing, one per preferred component), then state-conditional sections last |
+| Section order | Composition section first (serves as structural overview — no separate "container" section), then zone-specific sections in visual order (leading → middle → trailing), then slot content sections (grouped by slot: leading → trailing, one per preferred component), then state-conditional sections last |
 | Column consistency | All rows in a section must have same number of values matching column count |
 | Hierarchy | Use `isSubProperty: true` for properties that belong to a parent row |
 | Value format | Use plain numbers without units: "48", "16", "full", "center". Use "–" for not applicable. |
@@ -612,6 +657,9 @@ Both the extraction and cross-variant data provide pre-formatted `display` strin
 - **Measurement labels for constraints:** Min/max constraint labels must include the prefix: `"min 32"`, `"max 200"`. Padding and spacing measurements use Figma's default display (actual pixel values) with no custom labels.
 - **Extra annotations not in table:** Annotating properties that don't have a corresponding row in the section's table. Only draw measurements for properties documented in the table below — the token map gates which properties get annotated.
 - **Missing icon/component references:** Documenting `iconSize` without an `iconName` row. When an INSTANCE child represents an icon or component from a library, add a reference row using `parentSetName` (e.g., `"checkmark"`) before the size row. Use `"–"` in columns where the child is absent.
+- **Reporting measured pixel dimensions on HUG-sized containers:** The extraction returns both measured `width`/`height` and `layoutSizingHorizontal`/`layoutSizingVertical`. When the sizing mode is `HUG`, the pixel value is an artifact of current content, not a design constraint. Document `widthMode: hug` instead. Reserve pixel `width`/`height` rows for `FIXED`-sized nodes only. For `FILL`-sized nodes, document `widthMode: fill`.
+- **Saying "See X spec" while documenting X's internals:** When **any section** references another component's spec ("See X spec"), only document the hosting context — the container or slot that holds the component (sizing mode, padding, spacing, alignment). Do not re-document the component's own internal properties (padding, cornerRadius, minWidth, iconSize, borderWidth) — those belong to the component's own spec. This applies equally to slot content sections, sub-component sections, and sections for default slot children. If `self` measurements match the component's standalone defaults, they belong in the component's own spec, not here.
+- **Creating a separate "container" section instead of a composition section:** When a component has 2+ structural zones (slots, sub-components, content areas), the host container's properties (padding, spacing, alignment, heightMode) belong as group rows in the **composition section** — not in a dedicated "container" section. The composition section serves as both the structural map and the host container documentation. A separate container section fragments the overview an engineer needs to understand the layout.
 
 ---
 
@@ -628,17 +676,20 @@ Both the extraction and cross-variant data provide pre-formatted `display` strin
 | Container with multiple children | Do children have their own spacing? | Use `isSubProperty: true` for child properties |
 | Property only exists in some variants | Conditional on configuration? | Separate section, not columns |
 | Multiple unrelated variant axes | Would combining be confusing? | Separate sections for each axis |
-| Nested component (Button in slot) | Full component inside? | Reference "See Button spec" in sectionDescription |
+| Nested component (Button in slot) | Full component inside? | Reference "See Button spec" in sectionDescription. Document only the hosting container (slot sizing, padding, alignment) — not the nested component's internals. |
 | No explicit Density/Size variant axis | Could dimensions still vary by variable mode? | Check `figma_get_variables` for collections like "Density" with multiple modes |
 | TEXT node in component | Does it use a text style? | Check `textStyleId`; if non-empty, document style name; if empty, note "custom" or document individual properties |
-| Component composed of 2+ sub-components | Do sub-components have their own size variants? | Add a composition section first, mapping parent sizes to sub-component variants |
+| Component composed of 2+ sub-components | Do sub-components have their own size variants? | Add a composition section first (Pattern A), mapping parent sizes to sub-component variants |
+| Component with 2+ structural zones (slots + content areas) | Does an engineer need a layout map to understand the zones? | Add a composition section first (Pattern B) as the structural overview. Document host container properties here. Each zone gets its own section afterward for internals. |
 | State adds new properties (e.g., border on focus) | Do these properties not exist in the default state? Does a border/stroke appear, disappear, or change weight between states? | Create a state-conditional section (e.g., "Input — Selected") |
 | Behavior/Configuration variant axis (e.g., Static vs Interactive) | Do variants look visually different (borders, strokes, optional elements)? | Use the default configuration for the preview. If dimensional values are identical, document once with a note. If border/stroke differs, add a row for it. |
 | Sub-component INSTANCE with its own boolean properties | Does `instance.componentProperties` have BOOLEAN entries? | Enable them all, inspect revealed children, document their dimensions in the sub-component's section |
 | State variant with different stroke/border visibility | Does the border appear/disappear or change weight between states? | Create a state-conditional section showing the border difference (e.g., "Tag — Interactive states") |
 | No size/density/shape axes, only functional axes (e.g., checked, expanded, on/off) | Are dimensions identical across all variants? | Still use variants as columns — shows intentional consistency. Never collapse to a single "Default" column. |
-| SLOT node with `preferredValues` in `slotContents` | Does `slotContentDimensions` have measurement data for preferred components? | Create a `slotContent` section per preferred component, documenting contextual dimensions within the slot |
+| SLOT node with `preferredValues` in `slotContents` | Does `slotContentDimensions` have measurement data for preferred components? | Create a `slotContent` section per preferred component, documenting only what is unique to that placement |
+| SLOT node as direct child of the host container | Does the layout tree show the SLOT node as a structurally significant child (has sizing mode, alignment, clipsContent)? | Document the slot container's properties as **group rows in the composition section** (not a separate container section). Do NOT repeat them in each slotContent section — they are constant regardless of slot content. |
 | INSTANCE child (icon, badge, illustration) inside a container | Does `parentSetName` identify which component is used? Is it present in all variants? | Add an `iconName` row with `parentSetName`, then `iconSize`. Use `"–"` in columns where the child is absent. |
+| `layoutSizingHorizontal: HUG` or `layoutSizingVertical: HUG` on a container | Is the measured width/height a design constraint or an artifact of default content? | Document `widthMode: hug` / `heightMode: hug`. Do NOT report the measured pixel value — it changes with content. Only use pixel `width`/`height` rows for `FIXED`-sized nodes, or `minWidth`/`maxWidth` when constraints are set. |
 
 ---
 
@@ -704,30 +755,35 @@ General notes: "Density controlled by variable mode. All slot dimensions adapt a
 | ├─ horizontalPadding | spacing-inset-compact (12) | spacing-inset-default (16) | spacing-inset-spacious (20) | Inset from edges |
 | ├─ contentSpacing | spacing-gap-compact (8) | spacing-gap-default (12) | spacing-gap-spacious (16) | Gap between slots |
 | └─ verticalPadding | spacing-inset-compact (8) | spacing-inset-default (12) | spacing-inset-spacious (16) | Optically 16/20/24 from top: 8/12/16 row padding + 8 inner content margin |
+| Leading content slot | – | – | – | Slot for avatar, icon, or checkbox |
+| ├─ widthMode | hug | hug | hug | Adapts to content |
+| ├─ verticalAlignment | center | center | top | Top-aligned at spacious for multi-line |
+| └─ clipsContent | true | true | true | Clips overflow |
+| Trailing content slot | – | – | – | Slot for icon button, switch, or metadata |
+| ├─ widthMode | hug | hug | hug | Adapts to content |
+| └─ verticalAlignment | center | center | center | Centered in row |
 
-### Leading content section
+### Leading content — Checkbox
 
-- Section name: "Leading content"
-- Description: "Slot for avatar, icon, or checkbox. See Avatar spec, Icon spec for component internals."
-- Preview: One Leading content sub-component instance per density column (sourced from the sub-component's own component set, not the parent List item). Each instance shows the leading content in isolation with its internal structure visible.
+- Section name: "Leading content — Checkbox"
+- Description: "Dimensional properties when Checkbox is placed in the leading content slot. See Checkbox spec for component internals."
+- Preview: Checkbox instances at each density
 - Columns: Spec | Compact | Default | Spacious | Notes
 
 | Spec | Compact | Default | Spacious | Notes |
 |---|---|---|---|---|
-| slotWidth | 24 | sizing-avatar-sm (40) | sizing-avatar-md (48) | Fixed width for leading area |
-| verticalAlignment | center | center | top | Top-aligned at spacious for multi-line |
+| slotWidth | 24 | sizing-avatar-sm (40) | sizing-avatar-md (48) | Fixed width constraint imposed by slot at each density |
 
-### Trailing content section
+### Trailing content — Icon button
 
-- Section name: "Trailing content"
-- Description: "Slot for icon button, switch, or metadata. See Icon button spec, Switch spec for internals."
-- Preview: One Trailing content sub-component instance per density column (sourced from the sub-component's own component set, not the parent List item). Each instance shows the trailing content in isolation.
+- Section name: "Trailing content — Icon button"
+- Description: "Dimensional properties when Icon button is placed in the trailing content slot. See Icon button spec for component internals."
+- Preview: Icon button instances at each density
 - Columns: Spec | Compact | Default | Spacious | Notes
 
 | Spec | Compact | Default | Spacious | Notes |
 |---|---|---|---|---|
-| slotMinWidth | 24 | 24 | 24 | Minimum; expands for content |
-| trailingPadding | 0 | 0 | spacing-trailing-spacious (4) | Extra padding at spacious |
+| trailingPadding | 0 | 0 | spacing-trailing-spacious (4) | Extra end padding at spacious — optical balance with wider row |
 
 ## Example: Component with Variant-Conditional Children (Checkbox)
 
@@ -778,14 +834,14 @@ Before rendering into Figma, verify:
 | ☐ **Hierarchy markers** | Child rows have `isSubProperty: true`; last child in each group also has `isLastInGroup: true` |
 | ☐ **No units** | Values are plain numbers without px, dp, or pt |
 | ☐ **No placeholders** | No `<value>`, `[TBD]`, or placeholder text — only real measurements |
-| ☐ **Section order** | Composition section first (if applicable), then parent container, sub-components in visual order, slot content sections (grouped by slot), state-conditional sections last |
+| ☐ **Section order** | Composition section first (serves as structural overview — no separate container section), then zone-specific sections in visual order, slot content sections (grouped by slot), state-conditional sections last |
 | ☐ **Notes column** | Every row has a notes value (use "–" if no note needed) |
 | ☐ **Preview per section** | Each section has a distinct preview showing variant instances relevant to that section's axis |
 | ☐ **Sub-component preview sourcing** | Sub-component section previews use `subComponents[].subCompSetId` from extraction, not the parent's component set. Boolean overrides from `subComponents[].booleanOverrides` (all set to `true`) are applied. |
 | ☐ **Preview frame untouched** | The `#Preview` frame's layout properties are NOT overridden — the template provides the correct layout |
 | ☐ **Measurement labels correct** | Padding and spacing use Figma's default display (actual pixel values). Min/max constraints use `freeText` with constraint prefix (`"min 32"`, `"max 200"`). |
 | ☐ **Table-driven annotations only** | Measurement lines appear ONLY for properties that have a corresponding row in the section's table. No extra annotations for properties not documented in the table. Token maps gate which properties get annotated. |
-| ☐ **Composition section** | If component has 2+ sub-components with their own size variants, a composition section comes first |
+| ☐ **Composition section** | If component has 2+ structural zones (sub-components with size variants, or a mix of slots and content areas), a composition section comes first. It serves as the structural overview and documents host container properties — no separate "container" section. |
 | ☐ **Behavior variant previews** | Default configuration only for the preview; border/stroke differences documented as table rows |
 | ☐ **State-conditional sections** | States that introduce new properties or change border/stroke have their own section (detected by `stateComparison` from the cross-variant data) |
 | ☐ **Slot content sections** | Every preferred component in `slotContents` with `slotContentDimensions` data has its own `slotContent` section. Sections are grouped by slot (leading → trailing) and placed after sub-component sections, before state-conditional sections. |

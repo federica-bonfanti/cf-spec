@@ -236,6 +236,10 @@ if (!node || (node.type !== 'COMPONENT_SET' && node.type !== 'COMPONENT')) {
   return;
 }
 
+// Ensure the correct page context is loaded for stable child traversal
+let _p = node; while (_p.parent && _p.parent.type !== 'PAGE') _p = _p.parent;
+if (_p.parent && _p.parent.type === 'PAGE') await figma.setCurrentPageAsync(_p.parent);
+
 const isComponentSet = node.type === 'COMPONENT_SET';
 
 const propDefs = node.componentPropertyDefinitions;
@@ -322,7 +326,16 @@ if (Object.keys(boolProps).length > 0) {
   }
 
   async function loadAllFonts(rootNode) {
-    const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+    const textNodes = [];
+    function collect(node) {
+      try {
+        if (node.type === 'TEXT') textNodes.push(node);
+        if ('children' in node && node.children) {
+          for (const c of node.children) { try { collect(c); } catch {} }
+        }
+      } catch {}
+    }
+    collect(rootNode);
     const fontSet = new Set();
     const fontsToLoad = [];
     for (const tn of textNodes) {
@@ -344,27 +357,29 @@ if (Object.keys(boolProps).length > 0) {
   await loadAllFonts(instance);
 
   function enableNestedBooleans(node) {
-    if (node.type === 'INSTANCE') {
-      const childProps = node.componentProperties;
-      if (childProps) {
-        const childBoolProps = {};
-        for (const [key, val] of Object.entries(childProps)) {
-          if (val.type === 'BOOLEAN') childBoolProps[key] = true;
-        }
-        if (Object.keys(childBoolProps).length > 0) {
-          try { node.setProperties(childBoolProps); } catch {}
+    try {
+      if (node.type === 'INSTANCE') {
+        const childProps = node.componentProperties;
+        if (childProps) {
+          const childBoolProps = {};
+          for (const [key, val] of Object.entries(childProps)) {
+            if (val.type === 'BOOLEAN') childBoolProps[key] = true;
+          }
+          if (Object.keys(childBoolProps).length > 0) {
+            try { node.setProperties(childBoolProps); } catch {}
+          }
         }
       }
-    }
-    if ('children' in node) {
-      for (const child of node.children) enableNestedBooleans(child);
-    }
+      if ('children' in node && node.children) {
+        for (const child of node.children) { try { enableNestedBooleans(child); } catch {} }
+      }
+    } catch {}
   }
 
   function directUnhide(node) {
-    if (!node.visible) node.visible = true;
-    if ('children' in node) {
-      for (const child of node.children) directUnhide(child);
+    try { if (!node.visible) node.visible = true; } catch {}
+    if ('children' in node && node.children) {
+      for (const child of node.children) { try { directUnhide(child); } catch {} }
     }
   }
 
@@ -611,7 +626,16 @@ const FONT_FAMILY = '__FONT_FAMILY__';
 const BOOLEAN_UNHIDES = __BOOLEAN_UNHIDES_JSON__;
 
 async function loadAllFonts(rootNode) {
-  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const textNodes = [];
+  function collect(node) {
+    try {
+      if (node.type === 'TEXT') textNodes.push(node);
+      if ('children' in node && node.children) {
+        for (const c of node.children) { try { collect(c); } catch {} }
+      }
+    } catch {}
+  }
+  collect(rootNode);
   const fontSet = new Set();
   const fontsToLoad = [];
   for (const tn of textNodes) {
@@ -639,6 +663,28 @@ async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
   return { family: 'Inter', style: 'Regular' };
 }
 
+function enableNestedBooleans(node) {
+  try {
+    if (node.type === 'INSTANCE') {
+      try {
+        const childProps = node.componentProperties;
+        if (childProps) {
+          const childBoolProps = {};
+          for (const [key, val] of Object.entries(childProps)) {
+            if (val.type === 'BOOLEAN') childBoolProps[key] = true;
+          }
+          if (Object.keys(childBoolProps).length > 0) {
+            try { node.setProperties(childBoolProps); } catch {}
+          }
+        }
+      } catch {}
+    }
+    if ('children' in node && node.children) {
+      for (const child of node.children) { try { enableNestedBooleans(child); } catch {} }
+    }
+  } catch {}
+}
+
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const variantTemplate = frame.findOne(n => n.name === '#variant-template');
 
@@ -647,19 +693,7 @@ variantTemplate.parent.appendChild(variant);
 variant.name = VARIANT_NAME;
 variant.visible = true;
 
-const textNodes = variant.findAll(n => n.type === 'TEXT');
-const fontSet = new Set();
-const fontsToLoad = [];
-for (const tn of textNodes) {
-  try {
-    const fn = tn.fontName;
-    if (fn && fn !== figma.mixed && fn.family) {
-      const key = fn.family + '|' + fn.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
-    }
-  } catch {}
-}
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+await loadAllFonts(variant);
 
 // Set variant title
 const titleFrame = variant.findOne(n => n.name === '#variant-title');
@@ -722,33 +756,6 @@ if (previewContainer && COMPONENT_SET_ID) {
         }
         wrapper.appendChild(instance);
 
-        function enableNestedBooleans(node) {
-          if (node.type === 'INSTANCE') {
-            const childProps = node.componentProperties;
-            if (childProps) {
-              const childBoolProps = {};
-              for (const [key, val] of Object.entries(childProps)) {
-                if (val.type === 'BOOLEAN') childBoolProps[key] = true;
-              }
-              if (Object.keys(childBoolProps).length > 0) {
-                try { node.setProperties(childBoolProps); } catch {}
-              }
-            }
-          }
-          if ('children' in node) {
-            for (const child of node.children) enableNestedBooleans(child);
-          }
-        }
-        const topBoolProps = {};
-        const topProps = instance.componentProperties;
-        if (topProps) {
-          for (const [key, val] of Object.entries(topProps)) {
-            if (val.type === 'BOOLEAN') topBoolProps[key] = true;
-          }
-          if (Object.keys(topBoolProps).length > 0) {
-            try { instance.setProperties(topBoolProps); } catch {}
-          }
-        }
         enableNestedBooleans(instance);
         await loadAllFonts(instance);
 
@@ -860,7 +867,16 @@ const FONT_FAMILY = '__FONT_FAMILY__';
 const BOOLEAN_UNHIDES = __BOOLEAN_UNHIDES_JSON__;
 
 async function loadAllFonts(rootNode) {
-  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
+  const textNodes = [];
+  function collect(node) {
+    try {
+      if (node.type === 'TEXT') textNodes.push(node);
+      if ('children' in node && node.children) {
+        for (const c of node.children) { try { collect(c); } catch {} }
+      }
+    } catch {}
+  }
+  collect(rootNode);
   const fontSet = new Set();
   const fontsToLoad = [];
   for (const tn of textNodes) {
@@ -888,6 +904,28 @@ async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
   return { family: 'Inter', style: 'Regular' };
 }
 
+function enableNestedBooleans(node) {
+  try {
+    if (node.type === 'INSTANCE') {
+      try {
+        const childProps = node.componentProperties;
+        if (childProps) {
+          const childBoolProps = {};
+          for (const [key, val] of Object.entries(childProps)) {
+            if (val.type === 'BOOLEAN') childBoolProps[key] = true;
+          }
+          if (Object.keys(childBoolProps).length > 0) {
+            try { node.setProperties(childBoolProps); } catch {}
+          }
+        }
+      } catch {}
+    }
+    if ('children' in node && node.children) {
+      for (const child of node.children) { try { enableNestedBooleans(child); } catch {} }
+    }
+  } catch {}
+}
+
 const frame = await figma.getNodeByIdAsync(FRAME_ID);
 const variantTemplate = frame.findOne(n => n.name === '#variant-template');
 
@@ -896,19 +934,7 @@ variantTemplate.parent.appendChild(variant);
 variant.name = VARIANT_NAME;
 variant.visible = true;
 
-const textNodes = variant.findAll(n => n.type === 'TEXT');
-const fontSet = new Set();
-const fontsToLoad = [];
-for (const tn of textNodes) {
-  try {
-    const fn = tn.fontName;
-    if (fn && fn !== figma.mixed && fn.family) {
-      const key = fn.family + '|' + fn.style;
-      if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
-    }
-  } catch {}
-}
-await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
+await loadAllFonts(variant);
 
 const titleFrame = variant.findOne(n => n.name === '#variant-title');
 if (titleFrame) {
@@ -989,33 +1015,6 @@ if (previewContainer && COMPONENT_SET_ID) {
         wrapper.appendChild(inst);
         if (collection) clearModesRecursive(inst, collection);
 
-        function enableNestedBooleans(node) {
-          if (node.type === 'INSTANCE') {
-            const childProps = node.componentProperties;
-            if (childProps) {
-              const childBoolProps = {};
-              for (const [key, val] of Object.entries(childProps)) {
-                if (val.type === 'BOOLEAN') childBoolProps[key] = true;
-              }
-              if (Object.keys(childBoolProps).length > 0) {
-                try { node.setProperties(childBoolProps); } catch {}
-              }
-            }
-          }
-          if ('children' in node) {
-            for (const child of node.children) enableNestedBooleans(child);
-          }
-        }
-        const topBoolProps = {};
-        const topProps = inst.componentProperties;
-        if (topProps) {
-          for (const [key, val] of Object.entries(topProps)) {
-            if (val.type === 'BOOLEAN') topBoolProps[key] = true;
-          }
-          if (Object.keys(topBoolProps).length > 0) {
-            try { inst.setProperties(topBoolProps); } catch {}
-          }
-        }
         enableNestedBooleans(inst);
         await loadAllFonts(inst);
 

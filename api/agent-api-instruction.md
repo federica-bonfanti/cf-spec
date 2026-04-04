@@ -205,7 +205,16 @@ interface ConfigurationExample {
   title: string;          // "Example 1 — Primary button"
   variantProperties: Record<string, string | boolean>; // Figma property keys → values for instantiating the live component preview
   childOverrides?: Record<string, string | boolean>[]; // Per-child property overrides applied to slot children in order (index 0 → first child, etc.)
+  textOverrides?: Record<string, string>; // Figma layer name → new text content. Applied to TEXT nodes inside the main instance (e.g., { "heading": "My title" })
+  slotInsertions?: SlotInsertion[]; // Content to insert into named SLOT nodes for the preview
   properties: ExampleProperty[];
+}
+
+interface SlotInsertion {
+  slotName: string;          // SLOT node name in Figma (e.g., "trailing content slot")
+  componentNodeId: string;   // Node ID of the local component to instantiate
+  nestedOverrides?: Record<string, string | boolean>; // Component properties to set on the inserted instance via setProperties()
+  textOverrides?: Record<string, string>; // Figma layer name → new text content on the inserted instance
 }
 
 interface ExampleProperty {
@@ -364,6 +373,7 @@ Provide 1-4 examples showing common component configurations. Each example demon
 {
   "title": "Example 1 — Primary button",
   "variantProperties": { "Hierarchy": "Primary", "Size": "M 16", "Leading icon#43744:0": true },
+  "textOverrides": { "Label": "Submit" },
   "properties": [
     { "property": "label", "value": "\"Submit\"", "notes": "Action text" },
     { "property": "variant", "value": "primary", "notes": "–" }
@@ -376,9 +386,11 @@ Provide 1-4 examples showing common component configurations. Each example demon
 1. **Title format:** "Example N — [Brief description]"
 2. **variantProperties:** Object mapping Figma property keys (exactly as returned by `componentPropertyDefinitions`) to values. Used to instantiate a live component preview — include all variant axes and boolean toggles needed for the example.
 3. **childOverrides:** Optional. Array of per-child property override objects for composable slot children (index 0 = first child). Use when the example needs child instances configured differently from defaults (e.g., multiple items selected, different size, icon-only layout). Omit when children keep their defaults.
-4. **Properties:** Only include properties relevant to this example
-5. **Item-level properties:** When an example demonstrates behavior that depends on per-item state (e.g., multi-select with specific items selected, mixed disabled states), include item-level property values in the table using the convention `item N propertyName` (e.g., `item 1 isSelected`, `item 4 isSelected`). This ensures the table reflects what the preview shows.
-6. **Notes:** Brief clarification, or `"–"` if self-explanatory
+4. **textOverrides:** Optional. Object mapping Figma layer names to new text content (e.g., `{ "Label": "Submit", "subtext": "Supporting text" }`). Applied to TEXT nodes inside the main component instance so the preview reflects the text values shown in the example table. Layer names must match exactly as they appear in Figma. Omit when all text keeps its default content.
+5. **slotInsertions:** Optional. Array of `SlotInsertion` objects for inserting content into named SLOT nodes (e.g., placing a trailing-text sub-component into the trailing slot). Each entry specifies the slot name, the component node ID to instantiate, and optional `nestedOverrides` (component properties via `setProperties`) and `textOverrides` (TEXT node content) on the inserted instance. Use extraction data from Step 4b (`slotProps` preferred instances and node IDs) to populate. Omit when slots keep their default content. For slots that already contain a default child instance (e.g., a title slot with a pre-populated sub-component), include a `slotInsertions` entry that replaces the default child when the example requires different text or property values — default slot children have compound node IDs and cannot be mutated in place.
+6. **Properties:** Only include properties relevant to this example
+7. **Item-level properties:** When an example demonstrates behavior that depends on per-item state (e.g., multi-select with specific items selected, mixed disabled states), include item-level property values in the table using the convention `item N propertyName` (e.g., `item 1 isSelected`, `item 4 isSelected`). This ensures the table reflects what the preview shows.
+8. **Notes:** Brief clarification, or `"–"` if self-explanatory
 
 ### Choosing Examples
 
@@ -482,6 +494,8 @@ Before returning the JSON, verify:
 | ☐ **Configuration examples** | 1-4 examples showing common, variant, and complex configurations |
 | ☐ **variantProperties for previews** | Each example has `variantProperties` mapping Figma property keys to values for instantiating a live component preview |
 | ☐ **childOverrides match example tables** | When `childOverrides` sets per-child properties, the example table includes corresponding `item N propertyName` rows so the table reflects the preview |
+| ☐ **Preview text matches example table** | When the example table specifies text values (label, title, subtext), `textOverrides` and/or `slotInsertions[].textOverrides` are provided so the live preview reflects those values instead of showing default placeholder text. Keys must match exact TEXT node `name` from `textNodeMap`, not parent frame names |
+| ☐ **Slot content inserted for examples** | When the example table specifies slot content (e.g., trailing content type), `slotInsertions` is provided with the correct component node ID so the preview shows the actual slot content |
 | ☐ **Numbered slots collapsed** | If Figma uses sequential numbered slots (e.g., `tab1`–`tab8`) with the same sub-component, they are documented as a single array property, not individual properties |
 | ☐ **No transient states as properties** | Hover, pressed, and focused are not listed as property values — only persistent states (disabled, selected, loading) are documented as booleans |
 | ☐ **No event handlers** | `onPress`, `onChange`, `onSelectionChange`, etc. are omitted — these are code-level concerns, not design properties |
@@ -530,6 +544,10 @@ Before returning the JSON, verify:
 - **Guessed default values:** Use `"–"` if the default is unknown
 - **Non-configurable properties included:** Skip internal/private props not exposed to consumers
 - **Example table doesn't reflect preview state:** When an example uses `childOverrides` to configure child instances (e.g., selecting multiple items, changing size or layout), the table must include matching `item N propertyName` rows so the preview and table tell the same story
+- **Text override keys guessed from frame names:** The `textOverrides` key must match the TEXT node's own `name` property, not its parent frame name. Use `textNodeMap` from the extraction script to get exact layer names. Layer names are case-sensitive — `'subtext'` and `'Subtext'` are different nodes. For example, if a frame is named `"title"` but the TEXT node inside it is named `"section heading"`, the correct key is `"section heading"`
+- **Preview shows default text instead of example values:** When the example table specifies text like `label: "See all"` or `subtext: "Supporting context"`, but the preview shows the component's default placeholder text (e.g., "Label", "Subtext"). Always include `textOverrides` with matching Figma layer names (from `textNodeMap`) so the preview text matches the table. For text inside slot content, use `slotInsertions[].textOverrides`
+- **Missing slotInsertions for non-default slot content:** When the example table shows a specific trailing/leading content type (e.g., TrailingText, IconButtons), but no `slotInsertions` is provided, the preview will show an empty slot. Include `slotInsertions` with the component node ID from extraction data
+- **Attempting to mutate default slot children in place:** Default slot children have compound node IDs and cannot be reliably mutated via `findOne` or `setProperties` — calls will crash with "node does not exist". When an example needs different text or properties on a default slot child, include a `slotInsertions` entry that replaces it with a fresh instance carrying the desired overrides. The SKILL.md script handles the replacement automatically
 - **Global defaults used instead of contextual:** Sub-component tables must use the contextual defaults from extraction data (`slotProps[].defaultChildren[].contextualOverrides` or `composableChildren[].contextualOverrides`), not the standalone component's global defaults. A Button in a trailing slot may default to `tertiary` / `small` even though the standalone Button defaults to `primary` / `medium`
 - **Missing source component reference:** Every sub-component table description must identify the source component ("Instance of [Component]. See [Component] API for full details.") so engineers know where to find the complete API
 
@@ -563,6 +581,7 @@ This example shows a component with a **variable mode-controlled property** (`sh
     {
       "title": "Example 1 — Primary button",
       "variantProperties": { "Hierarchy": "Primary", "Size": "M 16", "Behvaior": "Hug", "Leading icon#43744:0": true, "Tailing icon#43744:12": false, "Label#43744:24": true },
+      "textOverrides": { "Label": "Awww!" },
       "properties": [
         { "property": "label", "value": "\"Awww!\"", "notes": "Text string" },
         { "property": "leadingArtwork", "value": "chevron_down_small", "notes": "Icon from iconography library" }
@@ -583,6 +602,7 @@ This example shows a component with a **variable mode-controlled property** (`sh
     {
       "title": "Example 3 — Menu button (Desktop only)",
       "variantProperties": { "Hierarchy": "Secondary", "Size": "S 14", "Behvaior": "Hug", "Leading icon#43744:0": false, "Tailing icon#43744:12": true, "Label#43744:24": true },
+      "textOverrides": { "Label": "Sort by" },
       "properties": [
         { "property": "behavior", "value": "popOver", "notes": "–" },
         { "property": "size", "value": "small", "notes": "–" },
@@ -595,6 +615,7 @@ This example shows a component with a **variable mode-controlled property** (`sh
     {
       "title": "Example 4 — Danger button",
       "variantProperties": { "Hierarchy": "Primary", "Size": "L 18", "Behvaior": "Fill", "Leading icon#43744:0": true, "Tailing icon#43744:12": false, "Label#43744:24": true },
+      "textOverrides": { "Label": "Eject passenger" },
       "properties": [
         { "property": "size", "value": "large", "notes": "–" },
         { "property": "variant", "value": "dangerPrimary", "notes": "–" },
@@ -682,6 +703,7 @@ This example demonstrates the **slot content type pattern**: using enums with `n
     {
       "title": "Example 1 — Basic navigation item",
       "variantProperties": { "Leading content": "Icon", "Trailing content": "Chevron", "State": "Enabled" },
+      "textOverrides": { "Primary label": "Settings", "Secondary label": "Manage preferences" },
       "properties": [
         { "property": "primaryLabel", "value": "\"Settings\"", "notes": "–" },
         { "property": "secondaryLabel", "value": "\"Manage preferences\"", "notes": "–" },
@@ -693,6 +715,7 @@ This example demonstrates the **slot content type pattern**: using enums with `n
     {
       "title": "Example 2 — Profile item with avatar",
       "variantProperties": { "Leading content": "Avatar", "Trailing content": "Chevron", "State": "Enabled" },
+      "textOverrides": { "Primary label": "John Doe", "Secondary label": "john@email.com" },
       "properties": [
         { "property": "primaryLabel", "value": "\"John Doe\"", "notes": "–" },
         { "property": "secondaryLabel", "value": "\"john@email.com\"", "notes": "–" },
@@ -704,6 +727,7 @@ This example demonstrates the **slot content type pattern**: using enums with `n
     {
       "title": "Example 3 — Setting with switch",
       "variantProperties": { "Leading content": "Icon", "Trailing content": "Switch", "State": "Enabled" },
+      "textOverrides": { "Primary label": "Dark mode" },
       "properties": [
         { "property": "primaryLabel", "value": "\"Dark mode\"", "notes": "–" },
         { "property": "leadingContentType", "value": "icon", "notes": "–" },

@@ -3,6 +3,57 @@ title: "Changelog"
 description: "Product updates and release history"
 ---
 
+<Update label="V1.7.1 — April 2026" description="Slot-aware previews, sub-component token ownership, composition Pattern B, and slot mutation safety">
+  ## uSpec V1.7.1
+
+  API configuration examples now render live slot content and text overrides in previews. Color applies a token ownership framework to sub-component entries. Structure gains Pattern B composition sections for standalone components, boolean-toggled previews, and section ID-based rendering. All slot-traversing scripts use a crash-safe recursive collector.
+
+  ### Slot-aware API configuration previews
+
+  - Configuration examples now support `textOverrides` — a map of Figma TEXT node layer names to replacement text, applied to the main instance so previews show the example's actual text instead of default placeholders
+  - New `slotInsertions` parameter populates named SLOT nodes with fresh component instances: specify the slot name, a component node ID, and optional `nestedOverrides` / `textOverrides` on the inserted child
+  - All overrides are applied **before** `appendChild` into the slot — after adoption, child nodes get compound IDs and become inaccessible (see slot mutation ordering constraint below)
+  - Extraction returns `textNodeMap` — an array of `{ name, characters, parentName }` for every TEXT node in the default variant — eliminating guesswork for `textOverrides` keys
+
+  ### Sub-component token ownership (Color)
+
+  - New **token ownership decision framework** in the color instruction file — evaluate each `subComponentName` entry against four signals (full component vs leaf instance, slot-hosted, parent override) before including or excluding
+  - Leaf instances (icon fills, divider strokes) stay in the parent spec; full sub-components (buttons, badges, checkboxes) are excluded and noted in `generalNotes`
+  - Worked examples table covers common cases (MicroButton → exclude, Chevron icon → include, Divider → include, IconButton → exclude)
+  - Slot-based component guidance: document default slot content tokens, note slot architecture and preferred instances in `generalNotes`, explain extraction behavior with nested booleans
+
+  ### Composition Pattern B (Structure)
+
+  - New **Pattern B — Structural map** for standalone components or components without a size axis (e.g., Section Heading with leading slot + heading area + trailing slot)
+  - Uses `Spec | Default | Notes` columns with group rows for the host container and each structural zone — replaces the need for a separate "container" section
+  - **Boundary rule**: when any section says "See X spec", only document the hosting container (sizing mode, padding, spacing, alignment) — never re-document the component's own internals
+  - Slot container properties (sizing mode, alignment, clipsContent) belong as group rows in the composition section, not repeated in each slotContent section
+  - HUG-sized container guidance: document `widthMode: hug` instead of reporting measured pixel dimensions, which are artifacts of current content
+
+  ### Boolean-toggled previews (Structure)
+
+  - New preview type for standalone components with booleans controlling structural elements (slots, accessories, subtext)
+  - Shows meaningful boolean combinations as labeled instances (e.g., Default, With subtext, Full)
+  - `PROPERTY_OVERRIDES` array drives per-column boolean configurations in the preview script
+
+  ### Section ID-based rendering (Structure)
+
+  - Step 11b now returns the rendered section's node ID (`sectionId`)
+  - Step 11c preview script locates the section by ID instead of by name — eliminates name-collision issues when multiple sections share similar names
+  - Page context is loaded explicitly via `figma.setCurrentPageAsync` for stable child traversal
+
+  ### Slot-safe tree traversal
+
+  - `loadAllFonts` across API, color, and structure skills now uses a manual recursive collector with per-node try-catch instead of `findAll` — prevents crashes on SLOT nodes with compound IDs
+  - Color extraction adds `figma.setCurrentPageAsync` before traversal for stable child resolution
+  - `enableNestedBooleans` and `directUnhide` in the color skill wrapped with try-catch guards for slot-hosted instances
+  - `implementation.md` documents the **slot mutation ordering constraint**: all mutations on a child instance must happen before `appendChild` into a SLOT, with code examples for both correct and incorrect patterns, plus the default-slot-child replacement workaround
+
+  ### Response truncation guidance (Structure)
+
+  - Added guidance for handling MCP response truncation (>~20KB): run targeted follow-up extraction for missing fields instead of re-running the full script
+</Update>
+
 <Update label="V1.7.0 — April 2026" description="Figma slot detection, nearest-edge marker placement, component-relative spec placement, and improved rendering">
   ## uSpec V1.7.0
 

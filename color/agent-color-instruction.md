@@ -231,21 +231,58 @@ For complex components, use descriptive element names:
 - `"artwork Icon"` - icon fill
 
 ### Sub-Components (Nested Components)
-When a component contains another component (e.g., a Button inside a Section heading's trailing content):
-- **Include actual tokens** for sub-component entries — developers need the complete color picture
-- **Use `subComponentName` for richer notes** that provide context (e.g., `"Button container fill"` instead of just `"fill"`)
+
+When extraction returns entries with `subComponentName`, decide whether those tokens belong in the **parent's** spec or should be deferred to the **sub-component's own** spec. Use the reasoning framework below.
+
+#### Token ownership decision framework
+
+For each entry with a `subComponentName`, evaluate these signals:
+
+1. **Is it a full component with its own structure, variants, and states?** (e.g., Button, MicroButton, Checkbox, Switch) → **Exclude.** It will have its own color spec. Mention it in `generalNotes` instead.
+2. **Is it a leaf-level instance with no internal structure?** (e.g., an Icon, a Divider, a simple Shape) → **Include.** The parent controls its color — there is no separate spec for a standalone icon fill.
+3. **Is it hosted in a slot?** → Lean toward **exclude.** Slot content is interchangeable by design; documenting one possible child's internals as if they were fixed is misleading. Note the slot and its default content in `generalNotes`.
+4. **Does the parent explicitly override the sub-component's colors?** (e.g., the parent binds a different token to the nested instance's fill) → **Include** the overridden token, because the parent owns that decision.
+
+When in doubt: if the sub-component has its own variant axis (e.g., State: Enabled/Hover/Pressed) or is documented elsewhere in the design system, exclude it and reference it in `generalNotes`.
+
+#### Worked examples
+
+| Parent | Nested instance | `subComponentName` | Verdict | Why |
+|--------|----------------|---------------------|---------|-----|
+| Section heading | MicroButton | "MicroButton" | Exclude | Full component with stroke, icon, states. Will have its own spec. Note in `generalNotes`: "Title slot contains a MicroButton; see its dedicated color spec." |
+| Section heading | Chevron icon | "Icon" | Include | Leaf instance — the parent decides its fill color (`content-primary`). |
+| Card | Badge | "Badge" | Exclude | Full component with mode-controlled colors and its own spec. |
+| List item | Divider | "Divider" | Include | Leaf instance — single stroke color owned by the parent context. |
+| Toolbar | IconButton | "IconButton" | Exclude | Full component with states. Slot content. |
+
+#### Formatting rules for included sub-component entries
+
+When you **include** entries:
+- **Use `subComponentName` for richer notes** that provide context (e.g., `"Chevron icon fill"` instead of just `"fill"`)
 - **Group sub-component entries together** in the table when it aids readability
 - **Order elements** in visual order: leading slots → middle → trailing
 
-**Using `subComponentName`:** Entries from nested instances include a `subComponentName` field (see Step 4b output contract in the SKILL.md). Use this field to deterministically identify nested components — do not guess based on layer names alone. When entries have `subComponentName`, include their actual tokens in the table and use the sub-component name to write richer, more descriptive notes.
+When you **exclude** entries:
+- Add a note in `generalNotes` identifying the sub-component and directing readers to its own spec
+- Do not add placeholder rows with "See X spec" — simply omit those rows entirely
 
-**Example:**
-```json
-{ "element": "Button container", "token": "interactivePrimary", "notes": "Button container fill" },
-{ "element": "Button label", "token": "contentInversePrimary", "notes": "Button text color" }
-```
+### Slot-Based Components
 
-The `subComponentName` value tells you exactly which component is nested, enabling descriptive element names and notes that make sub-component boundaries clear while preserving the actual token data developers need.
+Components with SLOT nodes (type `'SLOT'` in Figma) host interchangeable child content. This affects color annotation in several ways:
+
+**Extraction behavior:**
+- The Step 4b extraction script traverses SLOT children using a slot-safe recursive collector (not `findAll`, which crashes on compound IDs). Entries from slot-hosted content include `subComponentName` when the child is a component instance.
+- Default slot content (the content that appears when no override is applied) is extracted normally. Preferred instances listed in the SLOT's `preferredValues` are not automatically extracted — only what is actually present in the default variant.
+
+**Nested booleans in slots:**
+- Sub-components inside a slot may have boolean properties that control visibility of internal elements (e.g., `showSubtext` on a title content sub-component). The extraction script enables all nested booleans recursively to capture the full set of color entries. This means the extraction output may include elements that are hidden by default.
+
+**Preview rendering limitations:**
+- Preview instances in the rendered annotation show slot content as-is (default content). Due to the slot mutation ordering constraint (see `implementation.md`), programmatically inserting preferred instances into slots for previews is complex and best-effort. If a preview does not show a particular slot child, the color table is still accurate — the preview is a visual aid, not the source of truth.
+
+**Writing `generalNotes` for slot-based components:**
+- Always mention the slot architecture and what the default slot content is. Example: `"Leading, title, and trailing are interchangeable slots. Color entries reflect the default title slot content (title text and subtext)."`
+- If sub-components from the token ownership framework were excluded, note them here. Example: `"The title slot contains a MicroButton by default; see its dedicated color spec for button-specific tokens."`
 
 ---
 
@@ -368,7 +405,7 @@ Determine states from what you see in Figma, not from a fixed list:
 | State matrix (Enabled/Hover/Disabled rows) | Interactive states? Yes | One variant per state, each with one "Spec" table |
 | Frames named "Default", "Negative" + states | Multiple visual variants with states? | One variant per combination: "Default / Enabled", "Default / Hover", etc. |
 | Frames named "Default", "Negative" without states | Multiple visual variants, no states? | One variant per visual variant, each with one "Spec" table |
-| Extraction entries with `subComponentName` | Nested component? Yes | Include actual tokens; use `subComponentName` for richer notes and element names |
+| Extraction entries with `subComponentName` | Nested component? Yes | Apply token ownership framework: include leaf instances (icons), exclude full sub-components (buttons) and note in `generalNotes` |
 | Hex color with no token reference | Hardcoded color | Use hex, note in `generalNotes` |
 | Same element in multiple states | Consistent naming | Use identical element name across variant entries |
 | Variable collection named "[Component] color" | Component-specific color modes? | One variant per Type × Mode combination — render ALL modes, not just one |
@@ -493,7 +530,7 @@ Note: This produces one section per Type × Mode combination (e.g., 2 types × 1
 ## Do NOT
 
 - **Do NOT invent token names.** Only use tokens found in Figma data.
-- **Do NOT discard sub-component tokens.** Show actual tokens with `subComponentName` context in notes.
+- **Do NOT blindly include or exclude sub-component tokens.** Apply the token ownership decision framework. Include tokens for leaf instances the parent owns; exclude tokens for full sub-components that have their own spec.
 - **Do NOT leave notes empty.** Every element needs a brief description.
 - **Do NOT include elements that don't have color.** Skip layout containers, spacers.
 - **Do NOT document states not shown in Figma.** Only document what exists.
@@ -729,7 +766,7 @@ Before proceeding to the rendering steps, verify:
 | ☐ **States are columns, not sections** (Strategy B) | States appear as column headers in the consolidated table, not as separate variant sections |
 | ☐ **Token names are clean** | No raw CSS variable syntax (`var(--content/contentPrimary)` → `contentPrimary`). Path-format names (e.g., `background/primary`) are valid when the variable has no `codeSyntax.WEB` — do not manually convert. |
 | ☐ **Element names consistent across states** | Same element uses the same name in every variant (e.g., "Background" is not renamed to "Fill" in Hover) |
-| ☐ **Sub-component tokens shown with context** | Entries with `subComponentName` include their actual tokens; `subComponentName` is used for richer notes and element names (e.g., `"Button container fill"`) — tokens are never discarded |
+| ☐ **Sub-component token ownership applied** | Entries with `subComponentName` evaluated using the token ownership framework: leaf instances (icons, dividers) included with parent ownership; full sub-components (buttons, badges) excluded and noted in `generalNotes` |
 | ☐ **Notes on every element** | Every element has a 3-8 word description; no empty notes or bare `"–"` |
 | ☐ **`generalNotes` is color-specific only** | No size, layout, prop, or behavior information — only color/token implementation notes. Omitted entirely if nothing color-specific to note |
 | ☐ **No invented tokens** | Every token name was found in Figma data, not guessed |
@@ -744,7 +781,7 @@ Before proceeding to the rendering steps, verify:
 
 - **Empty notes:** Never use `"–"` alone; every element needs a brief description
 - **Inconsistent element names:** Use the same name across states (don't rename "Background" to "Fill" in Hover)
-- **Discarding sub-component data:** Don't replace sub-component tokens with "Follows X styling" references; show actual tokens with sub-component context in notes
+- **Incorrect sub-component token handling:** Apply the token ownership framework. Don't blindly include all sub-component tokens (over-documenting) or blindly exclude them (under-documenting). Leaf instances belong in the parent spec; full sub-components with their own variants/states belong in their own spec
 - **Hardcoded hex values:** If you see `#000000` instead of a token, use the hex but note it in `generalNotes`
 - **Missing states:** Document all states visible in Figma, not just Enabled
 - **Inventing tokens:** Only use tokens you can find in the Figma data; don't guess token names
@@ -756,5 +793,5 @@ Before proceeding to the rendering steps, verify:
 - **Missing component color modes:** Not checking `figma_get_variables` for components like Tag, Badge, or Alert that likely have semantic color variants (Success, Warning, Error) controlled via variable modes
 - **Rendering only one mode:** When a component has multiple color modes (e.g., 11 Tag color modes), every mode must have its own section(s) with resolved semantic tokens — do not document only the default mode and describe the rest in `generalNotes`
 - **Missing boolean-gated elements:** Not merging `booleanDelta.delta` when `deltaCount > 0`. Elements hidden behind boolean toggles (icons, clear buttons, prefix/suffix content) must be accounted for — check the extraction output's `booleanDelta` field
-- **Discarding sub-component tokens:** Not showing actual tokens for entries with `subComponentName`. Always include real token data — use `subComponentName` for richer notes and element names, never as a signal to replace tokens with references. These fields are deterministic — do not rely on AI guesswork from layer names alone
+- **Ignoring sub-component token ownership:** Not applying the ownership framework to entries with `subComponentName`. Evaluate each: leaf instances (icon, divider) → include; full sub-components (button, badge, checkbox) → exclude and note in `generalNotes`. The `subComponentName` field is deterministic — use it to identify the nested component, then reason about ownership
 

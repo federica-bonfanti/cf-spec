@@ -64,13 +64,24 @@ cf-spec works best when your components are well structured — meaningful layer
 
 ## How to set up a new project
 
-**Step 1 — Get the cf-spec folder onto your machine**
+**Step 1 — Download the cf-spec folder onto your machine**
 
-Click the green **Code** button at the top of this GitHub page, then select **Download ZIP**. Unzip it somewhere easy to find, like your Documents folder. That is it — you now have cf-spec on your machine.
+Click the green **Code** button at the top of this GitHub page, then select **Download ZIP**. Unzip it somewhere easy to find, like your Documents folder. That is it — you now have cf-spec on your machine!
 
 **Step 2 — Create your project config file**
 
-Inside the cf-spec folder, find the file called `project-config-template.md`. Duplicate it and rename the copy to `project-config.md`. Open it in any text editor — TextEdit on Mac works fine — and fill in the details about your project's design system. This is the most important thing you will do. It teaches the agent about your project.
+Inside the cf-spec folder, find the file called project-config-template.md. Duplicate it and rename the copy to project-config.md.
+This is the most important thing you will do. It teaches the agent about your project — your design system, your audience, how detailed you want the output, and how it should look. Without it the agent will make assumptions that may not match your project.
+
+ ** The easiest way to fill it in is with Claude's help.**
+  Open a conversation with Claude at claude.ai and paste this:
+  "I am setting up cf-spec to generate component specs for a Figma design system.
+  Please help me fill in my project-config.md by asking me one section at a time.
+  The sections are: project basics, audience, depth, sections, look and feel,
+  token naming conventions, component taxonomy, typography, and example components.
+  Ask me questions for each section and then give me the completed text to paste in."
+  
+  Claude will guide you through each section, ask the right questions, and give you the completed text to paste directly into your project-config.md. It takes about 15 minutes and you only need to do it once per project.
 
 **Step 3 — Open Figma Desktop**
 

@@ -1,29 +1,62 @@
-# uSpec
+# cf-spec
 
-Generate design system documentation for your UI components — directly from your AI agent to Figma.
+A CF starting point for generating component specs directly into Figma using an AI agent.
 
-You describe a component, an agent skill analyzes it using your Figma file as context, and renders the spec directly in your Figma file. Supports both [Figma Console MCP](https://github.com/southleft/figma-console-mcp) and [native Figma MCP](https://github.com/figma/figma-mcp).
+Based on [uSpec](https://github.com/redongreen/uSpec) by Ian Guisard at Uber. MIT licensed.
 
-Works with **Cursor**, **Claude Code**, and **Codex**.
+---
 
-## What you can generate
+## What this is
 
-| Spec type | What you get |
-|-----------|--------------|
-| API Spec | Properties, values, defaults, and configuration examples |
-| Color Annotation | Design token mapping for every element and state |
-| Structure Spec | Dimensions, spacing, and padding across density and size variants |
-| Screen Reader Spec | VoiceOver, TalkBack, and ARIA accessibility specs |
-| Motion Spec | Animation timeline bars and easing details from After Effects data |
-| Component Anatomy | Numbered markers and attribute tables for every element |
-| Component Properties | Variant axes, boolean toggles, and variable mode exhibits |
+cf-spec uses an AI agent (Claude Code) and the Figma MCP to automatically generate structured component documentation directly inside your Figma file.
 
-## Get started
+You describe a component, the agent reads your Figma file, and renders a finished spec page in minutes.
 
-Full documentation, installation guide, and examples at **[uSpec.design](https://uspec.design/)**.
+It is not a plug-and-play tool. It requires a small amount of setup per project, but once configured it saves significant time on component documentation.
 
-## License
+---
 
-MIT — see [LICENSE](LICENSE) for details.
+## What it generates
 
-Designed by [Ian Guisard](https://www.linkedin.com/in/iguisard/).
+- **Anatomy** — numbered markers and attribute tables for every element
+- **API** — properties, values, defaults, and configuration examples
+- **Color** — design token mapping for every element and state
+- **Structure** — dimensions, spacing, and padding across variants
+- **Screen reader** — VoiceOver, TalkBack, and ARIA accessibility specs
+
+---
+
+## Prerequisites
+
+Before using cf-spec on a project you need:
+
+- Claude Code installed
+- Figma Desktop (not browser)
+- Figma MCP connected to Claude Code
+- A Figma file with source components (named layers, defined variants, real tokens)
+
+---
+
+## How to set up a new project
+
+1. Clone this repo to your machine
+2. Duplicate `project-config-template.md` and rename it `project-config.md`
+3. Fill in your project-specific details (design system name, token conventions, component taxonomy)
+4. Open Figma Desktop and navigate to your component file
+5. Open Claude Code in the cf-spec directory
+6. Run your first spec using the prompt format in the template
+
+---
+
+## Project config
+
+The `project-config.md` file is how you teach the agent about your specific design system. Without it, the agent will make assumptions that may not match your project.
+
+See `project-config-template.md` for full instructions.
+
+---
+
+## Credits
+
+Built on top of [uSpec](https://github.com/redongreen/uSpec) by Ian Guisard (Uber).
+MIT License — see LICENSE file.

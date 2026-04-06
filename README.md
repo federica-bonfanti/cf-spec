@@ -73,7 +73,7 @@ Click the green **Code** button at the top of this GitHub page, then select **Do
 Inside the cf-spec folder, find the file called project-config-template.md. Duplicate it and rename the copy to project-config.md.
 This is the most important thing you will do. It teaches the agent about your project — your design system, your audience, how detailed you want the output, and how it should look. Without it the agent will make assumptions that may not match your project.
 
- ** The easiest way to fill it in is with Claude's help.**
+**The easiest way to fill it in is with Claude's help.**
   Open a conversation with Claude at claude.ai and paste this:
   "I am setting up cf-spec to generate component specs for a Figma design system.
   Please help me fill in my project-config.md by asking me one section at a time.

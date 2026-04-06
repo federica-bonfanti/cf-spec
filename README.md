@@ -39,7 +39,7 @@ Before using cf-spec on a project you need:
 
 ## How to set up a new project
 
-1. Clone this repo to your machine
+1. Download or clone this repo to your machine
 2. Duplicate `project-config-template.md` and rename it `project-config.md`
 3. Fill in your project-specific details (design system name, token conventions, component taxonomy)
 4. Open Figma Desktop and navigate to your component file

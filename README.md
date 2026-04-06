@@ -75,11 +75,13 @@ This is the most important thing you will do. It teaches the agent about your pr
 
 **The easiest way to fill it in is with Claude's help.**
 Open a conversation with Claude at claude.ai and paste this:
-  "I am setting up cf-spec to generate component specs for a Figma design system.
+```
+I am setting up cf-spec to generate component specs for a Figma design system.
 Please help me fill in my project-config.md by asking me one section at a time.
 The sections are: project basics, audience, depth, sections, look and feel,
 token naming conventions, component taxonomy, typography, and example components.
-Ask me questions for each section and then give me the completed text to paste in."
+Ask me questions for each section and then give me the completed text to paste in.
+```
   
   Claude will guide you through each section, ask the right questions, and give you the completed text to paste directly into your project-config.md. It takes about 15 minutes and you only need to do it once per project.
 

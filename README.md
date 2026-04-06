@@ -74,12 +74,12 @@ Inside the cf-spec folder, find the file called project-config-template.md. Dupl
 This is the most important thing you will do. It teaches the agent about your project — your design system, your audience, how detailed you want the output, and how it should look. Without it the agent will make assumptions that may not match your project.
 
 **The easiest way to fill it in is with Claude's help.**
-  Open a conversation with Claude at claude.ai and paste this:
+Open a conversation with Claude at claude.ai and paste this:
   "I am setting up cf-spec to generate component specs for a Figma design system.
-  Please help me fill in my project-config.md by asking me one section at a time.
-  The sections are: project basics, audience, depth, sections, look and feel,
-  token naming conventions, component taxonomy, typography, and example components.
-  Ask me questions for each section and then give me the completed text to paste in."
+Please help me fill in my project-config.md by asking me one section at a time.
+The sections are: project basics, audience, depth, sections, look and feel,
+token naming conventions, component taxonomy, typography, and example components.
+Ask me questions for each section and then give me the completed text to paste in."
   
   Claude will guide you through each section, ask the right questions, and give you the completed text to paste directly into your project-config.md. It takes about 15 minutes and you only need to do it once per project.
 
@@ -104,12 +104,18 @@ You are now talking to the agent.
 **Step 5 — Run your first spec**
 
 Paste this prompt into Claude Code, replacing the bracketed parts with your own details:
-Read /path/to/cf-spec/project-config.md for design system context.
-Then generate a component anatomy spec for this Figma component: [paste your Figma component link here]
-Use the component's actual layer names and token values.
+```
+Read /path/to/cf-spec/project-config.md for design system context and output rules before doing anything else.
+
+Then generate a component anatomy spec for this Figma component:
+[paste your Figma component link here]
+
+Follow the rules in project-config.md for fonts, colours, frame width, depth, and audience.
+
 Create a new spec frame in the same Figma file called "[Component name] — Anatomy Spec".
 
-Watch your Figma file — the spec frame will appear directly on the canvas.
+Important: do not just create the structure — populate every section table with real data from the Figma file before finishing. If a section is empty, go back and fill it in.
+```
 
 ---
 

@@ -1,7 +1,7 @@
 {
   "mcpProvider": "figma-mcp",
-  "environment": "cursor",
-  "fontFamily": "Uber Move",
+  "environment": "claude-code",
+  "fontFamily": "Montserrat",
   "templateKeys": {
     "screenReader": "6351e6a91a6785702ffa57f7e7ae085fe9f83f57",
     "colorAnnotation": "0b939a05e7b403b481d5221b08f33c97dc4acd39",

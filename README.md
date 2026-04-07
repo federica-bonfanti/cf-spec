@@ -85,6 +85,9 @@ Ask me questions for each section and then give me the completed text to paste i
   
   Claude will guide you through each section, ask the right questions, and give you the completed text to paste directly into your project-config.md. It takes about 15 minutes and you only need to do it once per project.
 
+  > **Important:** Your `project-config.md` is project-specific — do not commit it back to the cf-spec repository. It should stay local to your machine. The `.gitignore` is already set up to prevent this, but be mindful if you are working in a forked version of the repo.
+> 
+
 **Step 3 — Open Figma Desktop**
 
 Open the Figma desktop app and navigate to your component library file. Make sure it is open — the agent connects to whatever file is currently active.
